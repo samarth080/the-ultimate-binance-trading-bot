@@ -1,0 +1,32 @@
+{
+  "orders": [
+    {
+      "type": "limit",
+      "symbol": "BTCUSDT",
+      "side": "BUY",
+      "quantity": 0.001,
+      "price": 50000,
+      "time_in_force": "GTC"
+    },
+    {
+      "type": "stop_limit",
+      "symbol": "ETHUSDT",
+      "side": "SELL",
+      "quantity": 0.1,
+      "stop_price": 3000,
+      "limit_price": 2950
+    }
+  ],
+  "ml_tracking": {
+    "symbols": ["BTCUSDT", "ETHUSDT"],
+    "interval": "1h",
+    "enabled_indicators": ["RSI", "MACD", "BollingerBands"]
+  },
+  "notifications": {
+    "telegram": {
+      "enabled": true,
+      "chat_id": "YOUR_CHAT_ID",
+      "token": "YOUR_BOT_TOKEN"
+    }
+  }
+}
