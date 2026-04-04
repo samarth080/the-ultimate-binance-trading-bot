@@ -17,16 +17,45 @@
       "limit_price": 2950
     }
   ],
+
   "ml_tracking": {
-    "symbols": ["BTCUSDT", "ETHUSDT"],
-    "interval": "1h",
-    "enabled_indicators": ["RSI", "MACD", "BollingerBands"]
+    "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+    "primary_tf": "5m",
+    "confirm_tf": "1h",
+    "enabled_indicators": ["RSI", "MACD", "BollingerBands", "ATR",
+                           "Supertrend", "VWAP", "ADX", "StochRSI"],
+    "confidence_threshold": 65
   },
+
+  "strategy": {
+    "symbols": ["BTCUSDT", "ETHUSDT"],
+    "primary_tf": "5m",
+    "confirm_tf": "1h",
+    "scan_interval_seconds": 60
+  },
+
+  "risk": {
+    "risk_per_trade_pct": 0.01,
+    "max_daily_loss_pct": 0.03,
+    "drawdown_halt_pct":  0.10,
+    "max_open_positions": 3,
+    "min_rr_ratio":       1.5,
+    "atr_stop_multiplier": 1.6,
+    "atr_tp_multiplier":   2.8,
+    "trailing_atr_mult":   1.2
+  },
+
+  "twap": {
+    "default_parts":    5,
+    "default_interval": 60
+  },
+
   "notifications": {
     "telegram": {
       "enabled": true,
+      "token":   "YOUR_BOT_TOKEN",
       "chat_id": "YOUR_CHAT_ID",
-      "token": "YOUR_BOT_TOKEN"
+      "_note": "Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env instead"
     }
   }
 }

@@ -9,6 +9,13 @@ from dotenv import load_dotenv
 import time
 from datetime import datetime
 
+# ── new engine imports (graceful fallback if pandas not installed) ────────────
+try:
+    from signal_engine import SignalEngine, analyse_timeframe
+    SIGNAL_ENGINE_AVAILABLE = True
+except ImportError:
+    SIGNAL_ENGINE_AVAILABLE = False
+
 # Load environment variables early
 load_dotenv()
 
@@ -58,11 +65,11 @@ logger = setup_logging()
 
 # Enhanced order scripts mapping with validation
 ORDER_SCRIPTS = {
-    'market': 'market_orders.py',
-    'limit': 'limit_orders.py',
-    'oco': Path('Advanced') / 'oco.py',
+    'market':     'market_orders.py',
+    'limit':      'limit_orders.py',
+    'oco':        Path('Advanced') / 'oco.py',
     'stop_limit': Path('Advanced') / 'stop_limit_orders.py',
-    'twap': Path('Advanced') / 'twap.py'
+    'twap':       Path('advanced')  / 'twap.py',
 }
 
 class BinanceBotError(Exception):
@@ -370,6 +377,70 @@ def run_order_script(order_type: str, args: List[str]) -> bool:
         logger.error(f"Unexpected error running script: {e}")
         return False
 
+def _run_signal_scan(symbol: str, primary_tf: str, confirm_tf: str):
+    """Run the advanced multi-TF signal scan and pretty-print the result."""
+    import pandas as pd
+    from binance.um_futures import UMFutures
+
+    api_key    = os.getenv("BINANCE_API_KEY", "")
+    secret_key = os.getenv("BINANCE_SECRET_KEY", "")
+    use_testnet = os.getenv("USE_TESTNET", "true").lower() == "true"
+    base_url = "https://testnet.binancefuture.com" if use_testnet else "https://fapi.binance.com"
+    client = UMFutures(key=api_key, secret=secret_key, base_url=base_url)
+
+    def fetch_klines(sym, interval, limit=200):
+        raw = client.klines(sym, interval, limit=limit)
+        cols = ["OpenTime","Open","High","Low","Close","Volume",
+                "CloseTime","QuoteVol","Trades","TakerBase","TakerQuote","Ignore"]
+        df = pd.DataFrame(raw, columns=cols)
+        for c in ["Open","High","Low","Close","Volume"]:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        return df
+
+    engine = SignalEngine(fetch_klines)
+    sig = engine.analyse(symbol, primary_tf, confirm_tf)
+
+    print(f"\n{'='*60}")
+    print(f"  Advanced Signal Scan: {symbol}  ({primary_tf} / {confirm_tf})")
+    print(f"{'='*60}")
+    if sig is None:
+        print("  No high-confidence signal at this time.")
+    else:
+        arrow = "LONG  (BUY)" if sig.direction.value == "LONG" else "SHORT (SELL)"
+        print(f"  Direction  : {arrow}")
+        print(f"  Confidence : {sig.confidence}%")
+        print(f"  Entry      : {sig.price}")
+        print(f"  Stop Loss  : {sig.stop_loss}  (ATR-based)")
+        print(f"  Take Profit: {sig.take_profit}  (R:R ≈ 1.75)")
+        print(f"\n  Reasons:")
+        for r in sig.reasons:
+            print(f"    • {r}")
+    print(f"{'='*60}\n")
+
+
+def _print_stats():
+    """Display trade statistics from the SQLite tracker."""
+    try:
+        from trade_tracker import TradeTracker
+        tracker = TradeTracker()
+        stats   = tracker.get_stats()
+        open_t  = tracker.get_open_trades()
+        print(f"\n{'='*50}")
+        print("PERFORMANCE STATS (All Time)")
+        print(f"{'='*50}")
+        print(f"  Total trades   : {stats['total_trades']}")
+        print(f"  Win rate       : {stats['win_rate']}%")
+        print(f"  Total PnL      : {stats['total_pnl']:.4f} USDT")
+        print(f"  Avg PnL/trade  : {stats['avg_pnl']:.4f} USDT")
+        print(f"  Avg R:R        : {stats['avg_rr']:.2f}")
+        print(f"  Max Drawdown   : {stats['max_drawdown_pct']:.2f}%")
+        print(f"  Profit Factor  : {stats['profit_factor']:.2f}")
+        print(f"\n  Open positions : {len(open_t)}")
+        print(f"{'='*50}\n")
+    except Exception as e:
+        logger.error(f"Stats error: {e}")
+
+
 def main():
     """Enhanced main function with comprehensive error handling."""
     parser = argparse.ArgumentParser(
@@ -381,16 +452,19 @@ Examples:
   python bot.py limit BTCUSDT BUY 0.001 25000
   python bot.py oco BTCUSDT SELL 0.001 26000 24000 23500
   python bot.py stop_limit BTCUSDT BUY 0.001 24500 25000
-  python bot.py twap BTCUSDT BUY 0.01 10 60
+  python bot.py twap BTCUSDT BUY 0.01 --parts 5 --interval 60
   python bot.py ml_track [SYMBOL] [INTERVAL]
-  python bot.py validate  # Check configuration
+  python bot.py signal [SYMBOL] [PRIMARY_TF] [CONFIRM_TF]   # advanced MTF signal
+  python bot.py strategy --symbols BTCUSDT ETHUSDT          # autonomous trading
+  python bot.py stats                                        # P&L stats
+  python bot.py validate
         """
     )
     
     parser.add_argument(
-        'order_type', 
-        choices=list(ORDER_SCRIPTS.keys()) + ['ml_track', 'validate'], 
-        help='Type of order, ML tracking, or validation'
+        'order_type',
+        choices=list(ORDER_SCRIPTS.keys()) + ['ml_track', 'signal', 'strategy', 'stats', 'validate'],
+        help='Order type, signal scan, autonomous strategy, stats, or validation'
     )
     parser.add_argument('args', nargs=argparse.REMAINDER, help='Order arguments')
     parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging')
@@ -431,7 +505,29 @@ Examples:
             success = run_order_script(args.order_type, args.args)
             if not success:
                 sys.exit(1)
-        
+
+        elif args.order_type == 'signal':
+            # Advanced multi-timeframe signal scan
+            if not SIGNAL_ENGINE_AVAILABLE or not BINANCE_AVAILABLE or not PANDAS_AVAILABLE:
+                logger.error("signal requires pandas and python-binance")
+                sys.exit(1)
+            symbol     = args.args[0] if args.args           else "BTCUSDT"
+            primary_tf = args.args[1] if len(args.args) > 1  else "5m"
+            confirm_tf = args.args[2] if len(args.args) > 2  else "1h"
+            _run_signal_scan(symbol, primary_tf, confirm_tf)
+
+        elif args.order_type == 'strategy':
+            # Launch the autonomous strategy engine as a subprocess
+            strategy_script = Path(__file__).parent / 'strategy_engine.py'
+            extra = list(args.args)
+            cmd = ['python', str(strategy_script)] + extra
+            logger.info(f"Launching strategy engine: {' '.join(cmd)}")
+            os.execv(sys.executable, [sys.executable] + cmd[1:] if cmd[0] == 'python' else cmd)
+
+        elif args.order_type == 'stats':
+            # Show trade stats from the tracker
+            _print_stats()
+
         elif args.order_type == 'ml_track':
             if not BINANCE_AVAILABLE or not PANDAS_AVAILABLE:
                 logger.error("ML tracking requires python-binance and pandas libraries")

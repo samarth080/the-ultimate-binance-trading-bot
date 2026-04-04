@@ -114,7 +114,141 @@ class TWAPOrderReq(BaseModel):
 
 # ── Lazy bot singletons ────────────────────────────────────────────────────────
 _market_bot = None
-_limit_bot = None
+_limit_bot  = None
+
+# ── Trade Tracker singleton ───────────────────────────────────────────────────
+_tracker = None
+
+# ── News engine singleton ─────────────────────────────────────────────────────
+_news_engine = None
+
+def _get_news_engine():
+    global _news_engine
+    if _news_engine is None:
+        try:
+            from news_engine import NewsEngine
+            _news_engine = NewsEngine(
+                on_signal    = _news_auto_execute,
+                default_symbol = "BTCUSDT",
+                auto_trade   = False,   # off by default, toggled via API
+            )
+            _news_engine.start()
+            api_log.info("NewsEngine started")
+        except Exception as e:
+            api_log.warning(f"NewsEngine unavailable: {e}")
+    return _news_engine
+
+
+def _news_auto_execute(sig):
+    """
+    Called by NewsEngine when auto_trade=True and |score| >= threshold.
+    Places a market order sized at minimum notional ($100) for the news signal.
+    """
+    try:
+        from binance.um_futures import UMFutures
+        use_testnet = os.getenv("USE_TESTNET", "true").lower() == "true"
+        base_url = "https://testnet.binancefuture.com" if use_testnet else "https://fapi.binance.com"
+        client = UMFutures(
+            key=os.getenv("BINANCE_API_KEY"),
+            secret=os.getenv("BINANCE_SECRET_KEY"),
+            base_url=base_url,
+        )
+
+        # Size: ~$150 notional (well above $100 minimum)
+        mark_px = float(client.ticker_price(symbol=sig.symbol)["price"])
+        qty = round(150.0 / mark_px, 3)
+        if qty <= 0:
+            return
+
+        result = client.new_order(
+            symbol=sig.symbol,
+            side=sig.direction,
+            type="MARKET",
+            quantity=qty,
+        )
+        avg = float(result.get("avgPrice") or 0)
+        if avg == 0:
+            avg = mark_px
+        _record_fill(sig.symbol, sig.direction, qty, avg, str(result.get("orderId", "")))
+        api_log.info(
+            f"NEWS AUTO-TRADE: {sig.direction} {qty} {sig.symbol} @ {avg:.2f} "
+            f"| score={sig.score:+.0f} | '{sig.headline[:50]}'"
+        )
+    except Exception as e:
+        api_log.error(f"News auto-execute failed: {e}")
+
+def _get_tracker():
+    global _tracker
+    if _tracker is None:
+        try:
+            from trade_tracker import TradeTracker
+            _tracker = TradeTracker()
+        except Exception as exc:
+            api_log.warning(f"TradeTracker unavailable: {exc}")
+    return _tracker
+
+
+def _record_fill(symbol: str, side: str, quantity: float,
+                 avg_price: float, order_id: str = ""):
+    """
+    Record a filled order in the TradeTracker.
+    - BUY  → open a LONG (or close an open SHORT for this symbol)
+    - SELL → open a SHORT (or close an open LONG for this symbol)
+    This makes manual UI orders visible in Trade Stats.
+    """
+    tracker = _get_tracker()
+    if tracker is None:
+        return
+
+    try:
+        symbol = symbol.upper()
+        side   = side.upper()
+
+        # Binance testnet often returns avgPrice="0" for market orders.
+        # Fall back to the live ticker so the entry price is meaningful.
+        if avg_price == 0:
+            try:
+                from binance.um_futures import UMFutures
+                client = UMFutures(
+                    key=os.getenv("BINANCE_API_KEY"),
+                    secret=os.getenv("BINANCE_SECRET_KEY"),
+                    base_url="https://testnet.binancefuture.com"
+                    if os.getenv("USE_TESTNET", "true").lower() == "true"
+                    else "https://fapi.binance.com",
+                )
+                avg_price = float(client.ticker_price(symbol=symbol)["price"])
+            except Exception:
+                pass   # keep 0 rather than crash
+
+        # Find any open trade for this symbol to see if this is a close
+        open_trades = [t for t in tracker.get_open_trades() if t.symbol == symbol]
+
+        if open_trades:
+            existing = open_trades[0]
+            is_close = (
+                (existing.direction == "LONG"  and side == "SELL") or
+                (existing.direction == "SHORT" and side == "BUY")
+            )
+            if is_close:
+                tracker.close_trade(existing.id, avg_price, close_reason="MANUAL")
+                api_log.info(f"TradeTracker: closed {existing.direction} #{existing.id} @ {avg_price}")
+                return
+
+        # Opening a new position
+        direction = "LONG" if side == "BUY" else "SHORT"
+        tid = tracker.open_trade(
+            symbol      = symbol,
+            direction   = direction,
+            entry_price = avg_price,
+            stop_loss   = 0.0,
+            take_profit = 0.0,
+            quantity    = quantity,
+            order_id    = str(order_id),
+        )
+        api_log.info(f"TradeTracker: opened {direction} #{tid} {symbol} @ {avg_price}")
+
+    except Exception as exc:
+        api_log.warning(f"TradeTracker record_fill error: {exc}")
 
 
 def _market() :
@@ -175,6 +309,8 @@ async def market_order(req: MarketOrderReq):
     result = bot.place_market_order(req.symbol, req.side, req.quantity)
     if not result:
         raise HTTPException(400, "Order failed — see logs")
+    avg_price = float(result.get("avgPrice") or result.get("price") or 0)
+    _record_fill(req.symbol, req.side, req.quantity, avg_price, result.get("orderId",""))
     return {"success": True, "order": result}
 
 
@@ -190,6 +326,10 @@ async def limit_order(req: LimitOrderReq):
     result = bot.place_limit_order(req.symbol, req.side, req.quantity, req.price)
     if not result:
         raise HTTPException(400, "Order failed — see logs")
+    # Only record when actually filled — a NEW order is resting on the book, not executed
+    status = result.get("status", "")
+    if status in ("FILLED", "PARTIALLY_FILLED"):
+        _record_fill(req.symbol, req.side, req.quantity, req.price, result.get("orderId",""))
     return {"success": True, "order": result}
 
 
@@ -199,12 +339,12 @@ async def oco_order(req: OCOOrderReq):
     try:
         from advanced.oco import BinanceOCOBot
         bot = BinanceOCOBot()
-        bot.place_oco_order(
+        result = bot.place_oco_order(
             req.symbol, req.side, req.quantity,
             req.price, req.stop_price, req.stop_limit_price,
             dry_run=req.dry_run,
         )
-        return {"success": True, "dry_run": req.dry_run}
+        return {"success": True, "dry_run": req.dry_run, "legs": result}
     except SystemExit:
         raise HTTPException(503, "OCO bot could not connect — check keys")
     except Exception as exc:
@@ -215,14 +355,27 @@ async def oco_order(req: OCOOrderReq):
 @app.post("/api/order/stop_limit")
 async def stop_limit_order(req: StopLimitOrderReq):
     api_log.info(f"STOP-LIMIT {req.side} {req.quantity} {req.symbol} stop={req.stop_price} lim={req.price}")
+
+    # Pre-flight: Binance Futures requires notional ≥ $100
+    notional = req.quantity * req.price
+    if notional < 100:
+        min_qty = round(100 / req.price * 1.05, 3)   # 5 % buffer
+        raise HTTPException(
+            400,
+            f"Order notional ${notional:.2f} is below the $100 Binance Futures minimum. "
+            f"Increase quantity to at least {min_qty} at this price."
+        )
+
     try:
-        from binance.client import Client
+        from binance.um_futures import UMFutures
         from advanced.stop_limit_orders import StopLimitOrderHandler
 
-        client = Client(
-            api_key=os.getenv("BINANCE_API_KEY"),
-            api_secret=os.getenv("BINANCE_SECRET_KEY"),
-            testnet=True,
+        _use_testnet = os.getenv("USE_TESTNET", "true").lower() == "true"
+        _base_url = "https://testnet.binancefuture.com" if _use_testnet else "https://fapi.binance.com"
+        client = UMFutures(
+            key=os.getenv("BINANCE_API_KEY"),
+            secret=os.getenv("BINANCE_SECRET_KEY"),
+            base_url=_base_url,
         )
         handler = StopLimitOrderHandler(client, api_log)
 
@@ -231,20 +384,60 @@ async def stop_limit_order(req: StopLimitOrderReq):
                 req.symbol.upper(), req.side.upper(),
                 req.quantity, req.stop_price, req.price,
             )
-            return {"dry_run": True, "valid": valid}
+            return {"dry_run": True, "valid": valid,
+                    "notional": round(notional, 2)}
 
-        result = handler.place_stop_limit_order(
-            req.symbol.upper(), req.side.upper(),
-            req.quantity, req.stop_price, req.price,
-        )
-        if not result:
-            raise HTTPException(400, "Stop-limit order failed — see logs")
-        return {"success": True, "order": result}
+        # Testnet blocks STOP order type (-4120). Use server-side monitor instead:
+        # watch mark price in background; when stop_price is hit, fire a MARKET order.
+        import threading, time
+
+        symbol_u = req.symbol.upper()
+        side_u   = req.side.upper()
+        stop_px  = req.stop_price
+        qty      = req.quantity
+
+        def _monitor_stop():
+            sell_side = side_u == "SELL"
+            api_log.info(f"STP monitor started: {symbol_u} {side_u} qty={qty} stop={stop_px}")
+            deadline = time.time() + 3600
+            while time.time() < deadline:
+                try:
+                    mark = float(client.mark_price(symbol=symbol_u)["markPrice"])
+                    triggered = (sell_side and mark <= stop_px) or (not sell_side and mark >= stop_px)
+                    if triggered:
+                        api_log.info(f"STP triggered: mark={mark} crossed stop={stop_px} — firing MARKET")
+                        client.new_order(symbol=symbol_u, side=side_u, type="MARKET", quantity=qty)
+                        return
+                except Exception as e:
+                    api_log.error(f"STP monitor error: {e}")
+                time.sleep(5)
+            api_log.warning(f"STP monitor timed out for {symbol_u}")
+
+        threading.Thread(target=_monitor_stop, daemon=True).start()
+        return {
+            "success": True,
+            "type": "STOP_MONITORED",
+            "symbol": symbol_u,
+            "side": side_u,
+            "quantity": qty,
+            "stop_price": stop_px,
+            "limit_price": req.price,
+            "note": "Testnet: server monitors mark price and fires MARKET when stop is hit",
+        }
     except HTTPException:
         raise
     except Exception as exc:
+        # Surface Binance -4164 notional error explicitly
+        msg = str(exc)
+        if "-4164" in msg or "notional" in msg.lower():
+            min_qty = round(100 / req.price * 1.05, 3)
+            raise HTTPException(
+                400,
+                f"Notional too small (${notional:.2f} < $100 minimum). "
+                f"Use quantity ≥ {min_qty} at this price."
+            )
         api_log.error(f"Stop-limit error: {exc}")
-        raise HTTPException(500, str(exc))
+        raise HTTPException(500, msg)
 
 
 @app.post("/api/order/twap")
@@ -261,15 +454,23 @@ async def twap_order(req: TWAPOrderReq):
 
     bot = _market()
     executed, errors = 0, []
+    total_value = 0.0
     for i in range(req.parts):
         api_log.info(f"TWAP [{i+1}/{req.parts}] {req.side} {part_qty} {req.symbol}")
         result = bot.place_market_order(req.symbol, req.side, part_qty)
         if result:
             executed += 1
+            fill_price = float(result.get("avgPrice") or result.get("price") or 0)
+            total_value += fill_price * part_qty
         else:
             errors.append(f"part {i+1} failed")
         if i < req.parts - 1:
             await asyncio.sleep(req.interval_seconds)
+
+    # Record the whole TWAP as one trade at the weighted avg price
+    if executed > 0:
+        avg_fill = total_value / (part_qty * executed)
+        _record_fill(req.symbol, req.side, part_qty * executed, avg_fill)
 
     return {"success": executed == req.parts, "parts_executed": executed, "errors": errors}
 
@@ -351,9 +552,250 @@ async def ml_analyze(symbol: str = "BTCUSDT", interval: str = "1m"):
         raise HTTPException(500, str(exc))
 
 
+@app.get("/api/signal")
+async def signal_scan(symbol: str = "BTCUSDT", primary_tf: str = "5m", confirm_tf: str = "1h"):
+    """Run the advanced multi-timeframe signal engine."""
+    try:
+        import pandas as pd
+        from binance.um_futures import UMFutures
+        from signal_engine import SignalEngine
+
+        client = UMFutures(
+            key=os.getenv("BINANCE_API_KEY"),
+            secret=os.getenv("BINANCE_SECRET_KEY"),
+            base_url="https://testnet.binancefuture.com" if os.getenv("USE_TESTNET","true").lower()=="true" else "https://fapi.binance.com",
+        )
+
+        def fetch_klines(sym, interval, limit=200):
+            raw = client.klines(sym, interval, limit=limit)
+            cols = ["OpenTime","Open","High","Low","Close","Volume",
+                    "CloseTime","QuoteVol","Trades","TakerBase","TakerQuote","Ignore"]
+            df = pd.DataFrame(raw, columns=cols)
+            for c in ["Open","High","Low","Close","Volume"]:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+            return df
+
+        def get_funding_rate(sym: str) -> float:
+            info = client.mark_price(symbol=sym)
+            return float(info.get("lastFundingRate", 0))
+
+        engine = SignalEngine(fetch_klines, get_funding_rate)
+        sig = engine.analyse(symbol.upper(), primary_tf, confirm_tf)
+
+        if sig is None:
+            return {
+                "symbol": symbol.upper(), "has_signal": False,
+                "primary_tf": primary_tf, "confirm_tf": confirm_tf,
+                "message": "No high-confidence signal at this time",
+            }
+
+        return {
+            "symbol":      sig.symbol,
+            "has_signal":  True,
+            "direction":   sig.direction.value,
+            "confidence":  sig.confidence,
+            "price":       sig.price,
+            "stop_loss":   sig.stop_loss,
+            "take_profit": sig.take_profit,
+            "atr":         sig.atr,
+            "primary_tf":  sig.timeframe,
+            "confirm_tf":  confirm_tf,
+            "reasons":     sig.reasons,
+            "indicators":  {k: round(v, 6) if isinstance(v, float) else v
+                            for k, v in sig.indicators.items()
+                            if isinstance(v, (int, float, str, type(None)))},
+            "ts": datetime.now().isoformat(),
+        }
+    except Exception as exc:
+        api_log.error(f"Signal scan failed: {exc}")
+        raise HTTPException(500, str(exc))
+
+
+@app.get("/api/stats")
+async def trade_stats():
+    """Return trade statistics from the SQLite tracker, including open positions."""
+    try:
+        from trade_tracker import TradeTracker
+        from binance.um_futures import UMFutures
+
+        tracker   = TradeTracker()
+        stats     = tracker.get_stats()
+        open_list = tracker.get_open_trades()
+        recent    = tracker.get_closed_trades(limit=10)
+
+        # Fetch current prices to compute unrealised PnL for open positions
+        current_prices: dict = {}
+        try:
+            client = UMFutures(
+                key=os.getenv("BINANCE_API_KEY"),
+                secret=os.getenv("BINANCE_SECRET_KEY"),
+                base_url="https://testnet.binancefuture.com"
+                if os.getenv("USE_TESTNET", "true").lower() == "true"
+                else "https://fapi.binance.com",
+            )
+            for t in open_list:
+                if t.symbol not in current_prices:
+                    current_prices[t.symbol] = float(
+                        client.ticker_price(symbol=t.symbol)["price"]
+                    )
+        except Exception:
+            pass  # price enrichment is best-effort
+
+        open_enriched = []
+        total_unrealised = 0.0
+        for t in open_list:
+            cp = current_prices.get(t.symbol)
+            unreal = None
+            if cp and t.entry_price:
+                if t.direction == "LONG":
+                    unreal = (cp - t.entry_price) * t.quantity
+                else:
+                    unreal = (t.entry_price - cp) * t.quantity
+                total_unrealised += unreal
+            open_enriched.append({
+                "id":        t.id,
+                "symbol":    t.symbol,
+                "direction": t.direction,
+                "entry":     t.entry_price,
+                "quantity":  t.quantity,
+                "current":   cp,
+                "unrealised_pnl": round(unreal, 4) if unreal is not None else None,
+                "entry_time": t.entry_time,
+            })
+
+        return {
+            "stats":             stats,
+            "open_positions":    len(open_list),
+            "total_unrealised":  round(total_unrealised, 4),
+            "open_trades":       open_enriched,
+            "recent_trades": [
+                {
+                    "symbol":    t.symbol,
+                    "direction": t.direction,
+                    "entry":     t.entry_price,
+                    "exit":      t.exit_price,
+                    "pnl":       t.pnl,
+                    "pnl_pct":   t.pnl_pct,
+                    "reason":    t.close_reason,
+                    "time":      t.exit_time,
+                } for t in recent
+            ],
+        }
+    except Exception as exc:
+        api_log.error(f"Stats failed: {exc}")
+        raise HTTPException(500, str(exc))
+
+
+@app.get("/api/stats/equity_curve")
+async def equity_curve():
+    """Return cumulative PnL series for charting."""
+    try:
+        from trade_tracker import TradeTracker
+        tracker = TradeTracker()
+        trades  = tracker.get_closed_trades(limit=500)
+        trades  = list(reversed(trades))   # oldest first
+        cum = 0.0
+        points = []
+        for t in trades:
+            cum += t.pnl or 0.0
+            points.append({
+                "time":   t.exit_time[:16] if t.exit_time else "",
+                "pnl":    round(t.pnl or 0.0, 4),
+                "cum":    round(cum, 4),
+                "reason": t.close_reason or "",
+                "symbol": t.symbol,
+            })
+        return {"points": points, "total": round(cum, 4)}
+    except Exception as exc:
+        api_log.error(f"Equity curve failed: {exc}")
+        raise HTTPException(500, str(exc))
+
+
+@app.get("/api/risk/status")
+async def risk_status():
+    """Return current risk manager state."""
+    try:
+        from risk_manager import RiskManager
+        rm = RiskManager()
+        return rm.status()
+    except Exception as exc:
+        api_log.error(f"Risk status failed: {exc}")
+        raise HTTPException(500, str(exc))
+
+
 @app.get("/api/logs")
 async def get_logs(limit: int = 100):
     return {"logs": list(log_buffer)[-limit:]}
+
+
+# ── News endpoints ────────────────────────────────────────────────────────────
+
+@app.on_event("startup")
+async def _startup():
+    """Start the news engine in the background on server startup."""
+    _get_news_engine()
+
+
+@app.get("/api/news")
+async def get_news(limit: int = 30):
+    """Return recent news items with sentiment scores."""
+    engine = _get_news_engine()
+    if not engine:
+        raise HTTPException(503, "News engine unavailable")
+    items = engine.recent_news(limit)
+    return {
+        "auto_trade": engine._auto_trade,
+        "count": len(items),
+        "items": [
+            {
+                "title":     n.title,
+                "summary":   n.summary[:200],
+                "source":    n.source,
+                "url":       n.url,
+                "published": n.published,
+                "score":     n.score,
+                "sentiment": n.sentiment,
+                "symbols":   n.symbols,
+                "ts":        n.ts,
+            }
+            for n in reversed(items)   # newest first
+        ],
+    }
+
+
+@app.get("/api/news/signals")
+async def get_news_signals(limit: int = 20):
+    """Return recent news-triggered trade signals."""
+    engine = _get_news_engine()
+    if not engine:
+        raise HTTPException(503, "News engine unavailable")
+    sigs = engine.recent_signals(limit)
+    return {
+        "auto_trade": engine._auto_trade,
+        "count": len(sigs),
+        "signals": [
+            {
+                "symbol":    s.symbol,
+                "direction": s.direction,
+                "score":     s.score,
+                "headline":  s.headline,
+                "source":    s.source,
+                "url":       s.url,
+                "ts":        s.ts,
+            }
+            for s in reversed(sigs)
+        ],
+    }
+
+
+@app.post("/api/news/auto_trade")
+async def set_auto_trade(enabled: bool):
+    """Enable or disable automatic trade execution on news signals."""
+    engine = _get_news_engine()
+    if not engine:
+        raise HTTPException(503, "News engine unavailable")
+    engine.set_auto_trade(enabled)
+    return {"auto_trade": enabled, "message": f"News auto-trade {'ENABLED' if enabled else 'DISABLED'}"}
 
 
 # ── WebSocket — streams buffered log entries ───────────────────────────────────

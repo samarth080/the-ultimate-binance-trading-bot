@@ -90,7 +90,9 @@ class LimitOrderBot:
         if not self.api_key or not self.secret_key:
             raise ValueError("API credentials not found. Please set BINANCE_API_KEY and BINANCE_SECRET_KEY in .env file")
 
-        self.client = UMFutures(key=self.api_key, secret=self.secret_key)
+        use_testnet = os.getenv("USE_TESTNET", "true").lower() == "true"
+        base_url = "https://testnet.binancefuture.com" if use_testnet else "https://fapi.binance.com"
+        self.client = UMFutures(key=self.api_key, secret=self.secret_key, base_url=base_url)
         self._setup_logging()
         self._symbol_info_cache = {}
     
@@ -207,8 +209,10 @@ class LimitOrderBot:
                         return False
                     
                     if tick_size > 0:
-                        remainder = (price - min_price) % tick_size
-                        if remainder != 0:
+                        # Use round() to avoid floating-point imprecision
+                        # e.g. (63000.0 - 261.10) % 0.10 → 0.0999... in Python, not 0
+                        steps = round((price - min_price) / tick_size)
+                        if abs(price - (min_price + steps * tick_size)) > tick_size * 1e-6:
                             self.logger.error(f"Price {price} doesn't match tick size {tick_size}")
                             return False
             
