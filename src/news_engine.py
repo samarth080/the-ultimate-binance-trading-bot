@@ -53,8 +53,11 @@ RSS_FEEDS = [
     ("Investing.com",  "https://www.investing.com/rss/news_301.rss"),
 ]
 
-POLL_INTERVAL        = 30    # seconds between feed polls (was 120 — faster = fresher news)
-MAX_ARTICLE_AGE_MIN  = 10   # ignore articles older than this many minutes
+POLL_INTERVAL        = 30    # seconds between feed polls
+# Why 360min: RSS feeds publish every 30-120min so 10min was killing everything.
+# _seen_uids dedup already prevents re-trading the same article.
+# 360min (6h) only blocks truly stale articles that slip through on restart.
+MAX_ARTICLE_AGE_MIN  = 360  # ignore articles older than 6 hours
 SYMBOL_COOLDOWN_SEC  = 120  # don't fire two signals on the same symbol within this window
 
 # ── Keyword sentiment weights ─────────────────────────────────────────────────
@@ -212,10 +215,62 @@ class NewsEngine:
 
     def start(self):
         import threading
+        # Warm-up pass: mark all articles currently in feeds as seen WITHOUT
+        # emitting signals.  This prevents a flood of signals on every restart
+        # from articles that are 1-6h old (real age of typical RSS entries).
+        # After this, only genuinely new articles (unseen UIDs) fire signals.
+        self._warmup()
         self._running = True
         self._thread  = threading.Thread(target=self._loop, daemon=True, name="news-engine")
         self._thread.start()
         logger.info("NewsEngine started — polling %d feeds every %ds", len(RSS_FEEDS), POLL_INTERVAL)
+
+    def _warmup(self):
+        """
+        Populate news buffer with existing feed articles — no signals emitted.
+        Marks all current UIDs as seen so only genuinely NEW articles (arriving
+        after startup) trigger trade signals.
+        """
+        loaded = 0
+        now_utc = datetime.now(tz=timezone.utc)
+        max_age = timedelta(minutes=MAX_ARTICLE_AGE_MIN)
+        for source_name, url in RSS_FEEDS:
+            try:
+                try:
+                    resp = _requests.get(url, headers=_HTTP_HEADERS, timeout=_HTTP_TIMEOUT, verify=False)
+                    feed = feedparser.parse(resp.text)
+                except Exception:
+                    feed = feedparser.parse(url)
+                for entry in feed.entries[:5]:
+                    uid = hashlib.md5(
+                        (entry.get("link", entry.get("title", "")) or "").encode()
+                    ).hexdigest()
+                    self._seen_uids.add(uid)
+
+                    # Still score and store so the NEWS tab shows content immediately
+                    pub_dt  = self._parse_pub_dt(entry)
+                    if pub_dt and (now_utc - pub_dt) > max_age:
+                        continue
+                    title   = entry.get("title",   "")
+                    summary = entry.get("summary", "") or entry.get("description", "")
+                    score, sentiment = self._score(title + " " + summary)
+                    symbols = self._extract_symbols(title + " " + summary)
+                    item = NewsItem(
+                        title     = title,
+                        summary   = (summary[:300]),
+                        source    = source_name,
+                        url       = entry.get("link", ""),
+                        published = entry.get("published", now_utc.isoformat()),
+                        score     = score,
+                        sentiment = sentiment,
+                        symbols   = symbols or [self._default_sym],
+                        uid       = uid,
+                    )
+                    self._news_buf.append(item)
+                    loaded += 1
+            except Exception as e:
+                logger.warning("NewsEngine warmup error [%s]: %s", source_name, e)
+        logger.info("NewsEngine warmup: loaded %d articles into buffer (signals suppressed)", loaded)
 
     def stop(self):
         self._running = False
