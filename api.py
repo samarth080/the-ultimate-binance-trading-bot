@@ -38,8 +38,20 @@ import uvicorn
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 # ── Rate limiter (keyed by client IP) ─────────────────────────────────────────
-# Why: prevents a misbehaving client or accidental loop from burning through
-# Binance's rate limits or causing unintended mass order placement.
+# These limits apply ONLY to HTTP UI requests (manual button clicks).
+# Automated paths (strategy engine, news auto-trade, TWAP sub-orders) call
+# Binance directly and are NOT subject to these limits.
+#
+# The real ceiling is Binance's own limits (300 orders/10s on futures).
+# These limits exist solely to catch runaway browser loops or scripts — not
+# to restrict legitimate trading.
+#
+# Override any limit via .env:  RATE_TRADE=120/minute  RATE_SIGNAL=60/minute
+_RATE_TRADE  = os.getenv("RATE_TRADE",  "120/minute")   # manual order endpoints
+_RATE_SIGNAL = os.getenv("RATE_SIGNAL", "60/minute")    # ML / signal reads
+_RATE_TWAP   = os.getenv("RATE_TWAP",   "20/minute")    # TWAP (spawns sub-orders)
+_RATE_READ   = os.getenv("RATE_READ",   "120/minute")   # stats / news / logs
+
 limiter = Limiter(key_func=get_remote_address)
 
 # ── App ────────────────────────────────────────────────────────────────────────
@@ -472,7 +484,7 @@ def _safe_limit(v: int, lo: int = 1, hi: int = 200) -> int:
 
 
 @app.get("/api/status")
-@limiter.limit("30/minute")
+@limiter.limit(_RATE_READ)
 async def status(request: Request):
     # Why: never expose even a partial key — the preview is not needed by the UI
     # and any log scraper that captures responses would harvest it.
@@ -489,7 +501,7 @@ async def status(request: Request):
 
 
 @app.post("/api/order/market")
-@limiter.limit("10/minute")   # Why: hard cap — prevents runaway loops placing dozens of orders
+@limiter.limit(_RATE_TRADE)
 async def market_order(request: Request, req: MarketOrderReq):
     await _require_auth(request)
     api_log.info(f"MARKET {req.side} {req.quantity} {req.symbol} dry={req.dry_run}")
@@ -507,7 +519,7 @@ async def market_order(request: Request, req: MarketOrderReq):
 
 
 @app.post("/api/order/limit")
-@limiter.limit("10/minute")
+@limiter.limit(_RATE_TRADE)
 async def limit_order(request: Request, req: LimitOrderReq):
     await _require_auth(request)
     api_log.info(f"LIMIT {req.side} {req.quantity} {req.symbol} @ {req.price} dry={req.dry_run}")
@@ -527,7 +539,7 @@ async def limit_order(request: Request, req: LimitOrderReq):
 
 
 @app.post("/api/order/oco")
-@limiter.limit("10/minute")
+@limiter.limit(_RATE_TRADE)
 async def oco_order(request: Request, req: OCOOrderReq):
     await _require_auth(request)
     api_log.info(f"OCO {req.side} {req.quantity} {req.symbol} dry={req.dry_run}")
@@ -549,7 +561,7 @@ async def oco_order(request: Request, req: OCOOrderReq):
 
 
 @app.post("/api/order/stop_limit")
-@limiter.limit("10/minute")
+@limiter.limit(_RATE_TRADE)
 async def stop_limit_order(request: Request, req: StopLimitOrderReq):
     await _require_auth(request)
     api_log.info(f"STOP-LIMIT {req.side} {req.quantity} {req.symbol} stop={req.stop_price} lim={req.price}")
@@ -633,7 +645,7 @@ async def stop_limit_order(request: Request, req: StopLimitOrderReq):
 
 
 @app.post("/api/order/twap")
-@limiter.limit("5/minute")   # Why: TWAP spawns multiple sub-orders; stricter cap
+@limiter.limit(_RATE_TWAP)
 async def twap_order(request: Request, req: TWAPOrderReq):
     await _require_auth(request)
     part_qty = req.total_quantity / req.parts
@@ -668,7 +680,7 @@ async def twap_order(request: Request, req: TWAPOrderReq):
 
 
 @app.get("/api/ml/analyze")
-@limiter.limit("20/minute")
+@limiter.limit(_RATE_SIGNAL)
 async def ml_analyze(request: Request, symbol: str = "BTCUSDT", interval: str = "1m"):
     symbol   = _clean_symbol(symbol)
     interval = _safe_interval(interval)
@@ -748,7 +760,7 @@ async def ml_analyze(request: Request, symbol: str = "BTCUSDT", interval: str = 
 
 
 @app.get("/api/signal")
-@limiter.limit("12/minute")
+@limiter.limit(_RATE_SIGNAL)
 async def signal_scan(request: Request, symbol: str = "BTCUSDT", primary_tf: str = "5m", confirm_tf: str = "1h"):
     """Run the advanced multi-timeframe signal engine."""
     symbol     = _clean_symbol(symbol)
@@ -811,7 +823,7 @@ async def signal_scan(request: Request, symbol: str = "BTCUSDT", primary_tf: str
 
 
 @app.get("/api/stats")
-@limiter.limit("30/minute")
+@limiter.limit(_RATE_READ)
 async def trade_stats(request: Request):
     """Return trade statistics from the SQLite tracker, including open positions."""
     try:
@@ -887,7 +899,7 @@ async def trade_stats(request: Request):
 
 
 @app.get("/api/stats/equity_curve")
-@limiter.limit("30/minute")
+@limiter.limit(_RATE_READ)
 async def equity_curve(request: Request):
     """Return cumulative PnL series for charting."""
     try:
@@ -913,7 +925,7 @@ async def equity_curve(request: Request):
 
 
 @app.get("/api/risk/status")
-@limiter.limit("30/minute")
+@limiter.limit(_RATE_READ)
 async def risk_status(request: Request):
     """Return current risk manager state."""
     try:
@@ -926,7 +938,7 @@ async def risk_status(request: Request):
 
 
 @app.get("/api/logs")
-@limiter.limit("60/minute")
+@limiter.limit(_RATE_READ)
 async def get_logs(request: Request, limit: int = 100):
     # Why: cap at 500 — returning the full deque via a tight loop would be a
     # trivial DoS by keeping the server busy serialising large payloads.
@@ -943,7 +955,7 @@ async def _startup():
 
 
 @app.get("/api/news")
-@limiter.limit("30/minute")
+@limiter.limit(_RATE_READ)
 async def get_news(request: Request, limit: int = 30):
     """Return recent news items with sentiment scores."""
     limit  = _safe_limit(limit, 1, 100)
@@ -972,7 +984,7 @@ async def get_news(request: Request, limit: int = 30):
 
 
 @app.get("/api/news/signals")
-@limiter.limit("30/minute")
+@limiter.limit(_RATE_READ)
 async def get_news_signals(request: Request, limit: int = 20):
     """Return recent news-triggered trade signals."""
     limit  = _safe_limit(limit, 1, 50)
@@ -999,7 +1011,7 @@ async def get_news_signals(request: Request, limit: int = 20):
 
 
 @app.post("/api/news/auto_trade")
-@limiter.limit("10/minute")
+@limiter.limit(_RATE_TRADE)
 async def set_auto_trade(request: Request, enabled: bool):
     """Enable or disable automatic trade execution on news signals."""
     # Why: this directly controls live trade execution — must require auth
