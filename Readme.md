@@ -331,7 +331,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Use testnet for initial testing
 - Understand the risks involved
 - Never invest more than you can afford to lose
-- The developers are not responsible for any financial losses
+- The developers are not responsible for any financial losse
 
 ---
 
