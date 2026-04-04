@@ -19,7 +19,9 @@
   ],
 
   "ml_tracking": {
-    "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+    "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT",
+                "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT", "LTCUSDT", "ATOMUSDT",
+                "UNIUSDT", "NEARUSDT", "MATICUSDT"],
     "primary_tf": "5m",
     "confirm_tf": "1h",
     "enabled_indicators": ["RSI", "MACD", "BollingerBands", "ATR",
@@ -28,7 +30,8 @@
   },
 
   "strategy": {
-    "symbols": ["BTCUSDT", "ETHUSDT"],
+    "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
+                "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT"],
     "primary_tf": "5m",
     "confirm_tf": "1h",
     "scan_interval_seconds": 60

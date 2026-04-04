@@ -324,6 +324,7 @@ def _news_auto_execute(sig):
       score 75–100 → TP +2.0%, SL -1.0%  (strong signal, wider target)
     """
     import threading, time
+    notifier = _get_notifier()
 
     try:
         from risk_manager import RiskManager
@@ -408,6 +409,10 @@ def _news_auto_execute(sig):
         except Exception as e:
             api_log.error(f"NEWS AUTO-TRADE: TP order failed: {e}")
 
+        notifier.order_filled(sig.symbol, sig.direction, qty, avg, str(result.get("orderId", "")))
+        notifier.signal_alert(sig.symbol, sig.direction, avg, sl_price, tp_price,
+                               abs(sig.score), [sig.headline[:80]])
+
         # ── Step 3: Stop-Loss — background monitor thread ────────────────────
         # Testnet blocks STOP_MARKET; we poll mark price and fire MARKET when hit.
         # IMPORTANT: every exit path calls rm.record_trade_close() so the open-
@@ -435,6 +440,9 @@ def _news_auto_execute(sig):
                 # Always decrement — even if the exit order itself fails the
                 # position is being closed, so the slot must free up.
                 rm.record_trade_close(pnl=0.0, equity=exit_price * qty)
+                pnl_v = ((exit_price - avg) if is_long else (avg - exit_price)) * qty
+                pnl_p = pnl_v / (avg * qty) * 100 if avg * qty > 0 else 0.0
+                notifier.trade_closed(sig.symbol, sig.direction, pnl_v, pnl_p)
                 api_log.info(f"NEWS AUTO-TRADE CLOSED ({reason}): {sig.symbol}")
 
             deadline = time.time() + 3600  # 1h max hold
@@ -457,6 +465,9 @@ def _news_auto_execute(sig):
                         )
                         # TP LIMIT likely already filled; still decrement counter
                         rm.record_trade_close(pnl=0.0, equity=mark * qty)
+                        pnl_v = ((mark - avg) if is_long else (avg - mark)) * qty
+                        pnl_p = pnl_v / (avg * qty) * 100 if avg * qty > 0 else 0.0
+                        notifier.trade_closed(sig.symbol, sig.direction, pnl_v, pnl_p)
                         return
 
                 except Exception as e:
@@ -476,6 +487,7 @@ def _news_auto_execute(sig):
 
     except Exception as e:
         api_log.error(f"News auto-execute failed: {e}")
+        notifier.error_alert(f"News auto-trade error: {str(e)[:100]}")
 
 def _get_tracker():
     global _tracker
@@ -486,6 +498,62 @@ def _get_tracker():
         except Exception as exc:
             api_log.warning(f"TradeTracker unavailable: {exc}")
     return _tracker
+
+
+# ── Telegram notifier singleton ────────────────────────────────────────────────
+_notifier_inst = None
+
+def _get_notifier():
+    global _notifier_inst
+    if _notifier_inst is None:
+        try:
+            from notifications import TelegramNotifier
+            _notifier_inst = TelegramNotifier()
+            if _notifier_inst.enabled:
+                api_log.info("Telegram notifier enabled")
+            else:
+                api_log.info("Telegram notifier loaded but disabled (no token/chat_id in .env)")
+        except Exception as e:
+            api_log.warning(f"TelegramNotifier unavailable: {e}")
+
+            class _Noop:
+                def send_async(self, *a, **k): pass
+                def signal_alert(self, *a, **k): pass
+                def order_filled(self, *a, **k): pass
+                def trade_closed(self, *a, **k): pass
+                def error_alert(self, *a, **k): pass
+                def daily_summary(self, *a, **k): pass
+
+            _notifier_inst = _Noop()
+    return _notifier_inst
+
+
+async def _daily_summary_loop():
+    """Send Telegram daily P&L summary at 23:55 UTC, once per day."""
+    from datetime import timezone
+    sent_date = ""
+    while True:
+        await asyncio.sleep(60)
+        now = datetime.now(timezone.utc)
+        today = str(now.date())
+        if now.hour == 23 and now.minute >= 55 and sent_date != today:
+            try:
+                from trade_tracker import TradeTracker
+                from risk_manager import RiskManager
+                tracker = TradeTracker()
+                rm = RiskManager()
+                state = rm.status()
+                stats = tracker.get_stats(since=today)
+                _get_notifier().daily_summary(
+                    pnl=state.get("daily_pnl", 0),
+                    trades=stats.get("total_trades", 0),
+                    win_rate=stats.get("win_rate", 0),
+                    equity=state.get("peak_equity", 0),
+                )
+                sent_date = today
+                api_log.info("Daily Telegram summary sent")
+            except Exception as e:
+                api_log.error(f"Daily summary failed: {e}")
 
 
 def _record_fill(symbol: str, side: str, quantity: float,
@@ -1067,6 +1135,7 @@ async def get_logs(request: Request, limit: int = 100):
 async def _startup():
     """Start the news engine in the background on server startup."""
     _get_news_engine()
+    asyncio.create_task(_daily_summary_loop())
 
 
 @app.get("/api/news")
@@ -1137,6 +1206,177 @@ async def set_auto_trade(request: Request, enabled: bool):
     engine.set_auto_trade(enabled)
     api_log.info(f"News auto-trade toggled: {'ENABLED' if enabled else 'DISABLED'}")
     return {"auto_trade": enabled, "message": f"News auto-trade {'ENABLED' if enabled else 'DISABLED'}"}
+
+
+# ── Market data endpoints ─────────────────────────────────────────────────────
+
+@app.get("/api/prices")
+@limiter.limit(_RATE_READ)
+async def get_prices(request: Request, symbols: str = "BTCUSDT,ETHUSDT,SOLUSDT"):
+    """Lightweight multi-symbol price fetch (no klines, just ticker)."""
+    syms = [_clean_symbol(s.strip()) for s in symbols.split(",") if s.strip()][:10]
+    try:
+        from binance.um_futures import UMFutures
+        client = UMFutures(
+            key=os.getenv("BINANCE_API_KEY"), secret=os.getenv("BINANCE_SECRET_KEY"),
+            base_url="https://testnet.binancefuture.com" if os.getenv("USE_TESTNET","true").lower()=="true" else "https://fapi.binance.com",
+        )
+        prices = {}
+        for sym in syms:
+            try:
+                prices[sym] = float(client.ticker_price(symbol=sym)["price"])
+            except Exception:
+                prices[sym] = None
+        return {"prices": prices, "ts": datetime.now().isoformat()}
+    except Exception as exc:
+        api_log.error(f"Prices failed: {exc}")
+        raise HTTPException(500, "Prices unavailable — see server logs")
+
+
+@app.get("/api/funding")
+@limiter.limit(_RATE_READ)
+async def get_funding_rates(request: Request,
+                             symbols: str = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,DOTUSDT"):
+    """Return current funding rates and market bias for a list of symbols."""
+    syms = [_clean_symbol(s.strip()) for s in symbols.split(",") if s.strip()][:15]
+    try:
+        from binance.um_futures import UMFutures
+        client = UMFutures(
+            key=os.getenv("BINANCE_API_KEY"), secret=os.getenv("BINANCE_SECRET_KEY"),
+            base_url="https://testnet.binancefuture.com" if os.getenv("USE_TESTNET","true").lower()=="true" else "https://fapi.binance.com",
+        )
+        rates = []
+        for sym in syms:
+            try:
+                info = client.mark_price(symbol=sym)
+                rate  = float(info.get("lastFundingRate", 0))
+                price = float(info.get("markPrice", 0))
+                rates.append({
+                    "symbol":          sym,
+                    "funding_rate":    round(rate, 6),
+                    "funding_pct":     round(rate * 100, 4),
+                    "mark_price":      round(price, 4),
+                    "annualized_pct":  round(rate * 3 * 365 * 100, 2),
+                    # positive funding = longs pay shorts = crowded longs = short bias
+                    "bias": "SHORT_BIAS" if rate > 0.0005 else ("LONG_BIAS" if rate < -0.0005 else "NEUTRAL"),
+                })
+            except Exception as e:
+                api_log.warning(f"Funding rate error for {sym}: {e}")
+        return {"rates": rates, "ts": datetime.now().isoformat()}
+    except Exception as exc:
+        api_log.error(f"Funding rates failed: {exc}")
+        raise HTTPException(500, "Funding rates unavailable — see server logs")
+
+
+@app.get("/api/signal/scan_multi")
+@limiter.limit(_RATE_SIGNAL)
+async def scan_multi_signal(request: Request,
+                             symbols: str = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,DOTUSDT",
+                             primary_tf: str = "5m",
+                             confirm_tf: str = "1h"):
+    """Run multi-timeframe SignalEngine across multiple symbols, return all results."""
+    syms       = [_clean_symbol(s.strip()) for s in symbols.split(",") if s.strip()][:10]
+    primary_tf = _safe_interval(primary_tf)
+    confirm_tf = _safe_interval(confirm_tf)
+    try:
+        import pandas as pd
+        from binance.um_futures import UMFutures
+        from signal_engine import SignalEngine
+
+        client = UMFutures(
+            key=os.getenv("BINANCE_API_KEY"), secret=os.getenv("BINANCE_SECRET_KEY"),
+            base_url="https://testnet.binancefuture.com" if os.getenv("USE_TESTNET","true").lower()=="true" else "https://fapi.binance.com",
+        )
+
+        def fetch_klines(sym, interval, limit=200):
+            raw  = client.klines(sym, interval, limit=limit)
+            cols = ["OpenTime","Open","High","Low","Close","Volume",
+                    "CloseTime","QuoteVol","Trades","TakerBase","TakerQuote","Ignore"]
+            df = pd.DataFrame(raw, columns=cols)
+            for c in ["Open","High","Low","Close","Volume"]:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+            return df
+
+        def get_funding_rate(sym: str) -> float:
+            info = client.mark_price(symbol=sym)
+            return float(info.get("lastFundingRate", 0))
+
+        engine  = SignalEngine(fetch_klines, get_funding_rate)
+        results = []
+        for sym in syms:
+            try:
+                sig = engine.analyse(sym, primary_tf, confirm_tf)
+                if sig:
+                    results.append({
+                        "symbol":     sig.symbol,
+                        "direction":  sig.direction.value,
+                        "confidence": sig.confidence,
+                        "price":      sig.price,
+                        "stop_loss":  sig.stop_loss,
+                        "take_profit":sig.take_profit,
+                        "atr":        sig.atr,
+                        "reasons":    sig.reasons[:3],
+                    })
+                else:
+                    # Still return the symbol so UI shows FLAT
+                    try:
+                        price = float(client.ticker_price(symbol=sym)["price"])
+                    except Exception:
+                        price = 0.0
+                    results.append({"symbol": sym, "direction": "FLAT", "confidence": 0, "price": price})
+            except Exception as e:
+                api_log.warning(f"Scan error for {sym}: {e}")
+                results.append({"symbol": sym, "direction": "FLAT", "confidence": 0, "error": str(e)[:50]})
+
+        active = [r for r in results if r.get("direction") not in ("FLAT", None)]
+        return {
+            "scanned":       len(syms),
+            "signals_found": len(active),
+            "results":       results,
+            "primary_tf":    primary_tf,
+            "confirm_tf":    confirm_tf,
+            "ts":            datetime.now().isoformat(),
+        }
+    except Exception as exc:
+        api_log.error(f"Multi-scan failed: {exc}")
+        raise HTTPException(500, "Multi-scan failed — see server logs")
+
+
+@app.get("/api/positions/live")
+@limiter.limit(_RATE_READ)
+async def live_binance_positions(request: Request):
+    """Return actual open positions from Binance exchange (not SQLite tracker)."""
+    try:
+        from binance.um_futures import UMFutures
+        client = UMFutures(
+            key=os.getenv("BINANCE_API_KEY"), secret=os.getenv("BINANCE_SECRET_KEY"),
+            base_url="https://testnet.binancefuture.com" if os.getenv("USE_TESTNET","true").lower()=="true" else "https://fapi.binance.com",
+        )
+        account = client.account()
+        positions = [
+            {
+                "symbol":         p["symbol"],
+                "side":           "LONG" if float(p["positionAmt"]) > 0 else "SHORT",
+                "size":           abs(float(p["positionAmt"])),
+                "entry_price":    float(p["entryPrice"]),
+                "mark_price":     float(p.get("markPrice", p["entryPrice"])),
+                "unrealised_pnl": round(float(p["unrealizedProfit"]), 4),
+                "leverage":       int(p.get("leverage", 1)),
+                "notional":       round(abs(float(p["positionAmt"])) * float(p.get("markPrice", p["entryPrice"])), 2),
+            }
+            for p in account.get("positions", [])
+            if float(p.get("positionAmt", 0)) != 0
+        ]
+        total_unrealised = sum(pos["unrealised_pnl"] for pos in positions)
+        return {
+            "positions":      positions,
+            "count":          len(positions),
+            "total_unrealised": round(total_unrealised, 4),
+            "ts":             datetime.now().isoformat(),
+        }
+    except Exception as exc:
+        api_log.error(f"Live positions failed: {exc}")
+        raise HTTPException(500, "Live positions unavailable — see server logs")
 
 
 # ── WebSocket — streams buffered log entries ───────────────────────────────────

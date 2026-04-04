@@ -431,6 +431,7 @@ select.finput option { background:#0b0b0e; }
       <div class="centre-tabs" style="border-bottom:none;flex:1;">
         <div class="ctab active" data-view="analytics">ML ANALYTICS</div>
         <div class="ctab"        data-view="signal">SIGNAL ENGINE</div>
+        <div class="ctab"        data-view="scanner">SCANNER</div>
         <div class="ctab"        data-view="stats">TRADE STATS</div>
         <div class="ctab"        data-view="news">NEWS</div>
       </div>
@@ -472,6 +473,17 @@ select.finput option { background:#0b0b0e; }
         </select>
         <button class="rfbtn" id="sig-scan-btn">SCAN</button>
       </div>
+      <div id="ctrl-scanner" style="padding:0 12px;display:none;align-items:center;gap:10px;">
+        <select class="int-sel" id="scan-ptf" style="width:55px" title="Primary TF">
+          <option value="5m" selected>5m</option>
+          <option value="15m">15m</option>
+        </select>
+        <select class="int-sel" id="scan-ctf" style="width:55px" title="Confirm TF">
+          <option value="1h" selected>1h</option>
+          <option value="4h">4h</option>
+        </select>
+        <button class="rfbtn" id="scan-run-btn">SCAN ALL</button>
+      </div>
       <div id="ctrl-stats" style="padding:0 12px;display:none;">
         <button class="rfbtn" id="stats-rfbtn">REFRESH</button>
       </div>
@@ -488,6 +500,13 @@ select.finput option { background:#0b0b0e; }
     <div class="cview" id="view-signal">
       <div id="sig-body">
         <div class="no-signal"><span>◈</span>SELECT SYMBOL AND CLICK SCAN</div>
+      </div>
+    </div>
+
+    <!-- SCANNER VIEW -->
+    <div class="cview" id="view-scanner">
+      <div id="scanner-body" style="overflow-y:auto;height:100%">
+        <div class="loading-msg">CLICK SCAN ALL TO ANALYSE MARKETS<span class="cursor"></span></div>
       </div>
     </div>
 
@@ -589,7 +608,7 @@ async function pollStatus() {
     const d = await api.get('/api/status');
     id('net-dot').className = 'dot on';
     id('net-lbl').textContent = 'ONLINE';
-    id('sb-api').textContent  = d.api_key_set ? `API: ${d.api_key_preview}` : 'API: NO KEY';
+    id('sb-api').textContent  = d.api_key_set ? 'API: OK' : 'API: NO KEY';
     id('sb-mode').textContent = d.testnet ? 'MODE: TESTNET' : 'MODE: MAINNET';
     id('sb-ts').textContent   = new Date().toLocaleTimeString();
   } catch {
@@ -675,7 +694,7 @@ document.querySelectorAll('.ctab').forEach(t => t.addEventListener('click', () =
   S.currentView = t.dataset.view;
   id('view-' + S.currentView).classList.add('active');
   // Toggle controls
-  ['analytics','signal','stats'].forEach(v => {
+  ['analytics','signal','stats','scanner'].forEach(v => {
     const ctrl = id('ctrl-' + v);
     if (ctrl) ctrl.style.display = (v === S.currentView) ? 'flex' : 'none';
   });
@@ -683,8 +702,9 @@ document.querySelectorAll('.ctab').forEach(t => t.addEventListener('click', () =
   const newsView = id('view-news');
   if (newsView) newsView.style.display = (S.currentView === 'news') ? 'flex' : 'none';
   // Auto-load data when switching tabs
-  if (S.currentView === 'stats') loadStats();
-  if (S.currentView === 'news')  loadNews();
+  if (S.currentView === 'stats')   loadStats();
+  if (S.currentView === 'news')    loadNews();
+  if (S.currentView === 'scanner') loadScanner();
 }));
 
 // ── Order tabs ────────────────────────────────────────────────────────────────
@@ -1372,6 +1392,106 @@ document.querySelectorAll('.ctab').forEach(tab => {
     tab.addEventListener('click', () => setTimeout(loadNews, 100));
   }
 });
+
+// ── Multi-ticker price poll ───────────────────────────────────────────────────
+async function pollTicker() {
+  try {
+    const d = await api.get('/api/prices?symbols=BTCUSDT,ETHUSDT,SOLUSDT');
+    if (d.prices.BTCUSDT) id('tick-price').textContent = '$' + fmt(d.prices.BTCUSDT);
+    if (d.prices.ETHUSDT) id('tick-eth').textContent   = '$' + fmt(d.prices.ETHUSDT);
+    if (d.prices.SOLUSDT) id('tick-sol').textContent   = '$' + fmt(d.prices.SOLUSDT);
+  } catch(e) {}
+}
+pollTicker(); setInterval(pollTicker, 15000);
+
+// ── Market Scanner ────────────────────────────────────────────────────────────
+const _SCAN_SYMBOLS = 'BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,DOTUSDT';
+
+async function loadScanner() {
+  const ptf = (id('scan-ptf')||{}).value || '5m';
+  const ctf = (id('scan-ctf')||{}).value || '1h';
+  const btn = id('scan-run-btn');
+  if (btn) { btn.classList.add('spin'); btn.textContent = '…'; }
+  id('scanner-body').innerHTML = '<div class="loading-msg">FETCHING FUNDING RATES + SCANNING ' + _SCAN_SYMBOLS.split(',').length + ' SYMBOLS<span class="cursor"></span></div>';
+  try {
+    const [fr, scan] = await Promise.all([
+      api.get('/api/funding?symbols=' + _SCAN_SYMBOLS),
+      api.get(`/api/signal/scan_multi?symbols=${_SCAN_SYMBOLS}&primary_tf=${ptf}&confirm_tf=${ctf}`),
+    ]);
+    renderScanner(fr, scan);
+    setAction(`Scanner: ${scan.signals_found} signals on ${scan.scanned} symbols`);
+  } catch(e) {
+    id('scanner-body').innerHTML = `<div style="padding:20px;color:var(--sell);font-size:11px">Error: ${esc(e.message)}</div>`;
+    setAction('Scanner error: ' + e.message);
+  } finally {
+    if (btn) { btn.classList.remove('spin'); btn.textContent = 'SCAN ALL'; }
+  }
+}
+
+function renderScanner(fr, scan) {
+  // ── Funding rates table ──────────────────────────────────────────────────
+  const frRows = (fr.rates || []).map(r => {
+    const pct     = r.funding_pct || 0;
+    const pctCls  = pct > 0.05 ? 'tr-neg' : (pct < -0.05 ? 'tr-pos' : '');
+    const biasCls = r.bias === 'SHORT_BIAS' ? 'var(--sell)' : (r.bias === 'LONG_BIAS' ? 'var(--buy)' : 'var(--text-dim)');
+    const biasLbl = r.bias === 'SHORT_BIAS' ? '↓ SHORT' : (r.bias === 'LONG_BIAS' ? '↑ LONG' : '— NEUT');
+    return `<div class="trade-row" style="grid-template-columns:90px 80px 80px 70px 90px">
+      <span style="color:var(--amber)">${esc(r.symbol)}</span>
+      <span class="${pctCls}">${pct >= 0 ? '+' : ''}${pct.toFixed(4)}%</span>
+      <span style="color:var(--text-dim)">${(r.annualized_pct||0).toFixed(1)}% APR</span>
+      <span style="color:${biasCls};font-size:9px">${biasLbl}</span>
+      <span style="color:var(--text-dim)">${r.mark_price ? fmt(r.mark_price) : '—'}</span>
+    </div>`;
+  }).join('');
+
+  // ── Signal scan table ────────────────────────────────────────────────────
+  const sigRows = (scan.results || []).map(r => {
+    const hasSignal = r.direction !== 'FLAT' && (r.confidence || 0) > 0;
+    const dirCls    = r.direction === 'LONG' ? 'tr-long' : (r.direction === 'SHORT' ? 'tr-short' : '');
+    const confColor = (r.confidence||0) >= 75 ? 'var(--buy)' : ((r.confidence||0) >= 55 ? 'var(--amber)' : 'var(--text-dim)');
+    const dirLabel  = hasSignal ? (r.direction === 'LONG' ? '▲ LONG' : '▼ SHORT') : '— FLAT';
+    const topReason = (r.reasons || [])[0] || r.error || '';
+    return `<div class="trade-row" style="grid-template-columns:90px 75px 55px 80px 1fr">
+      <span style="color:var(--amber)">${esc(r.symbol)}</span>
+      <span class="${dirCls}" style="${!hasSignal?'color:var(--text-dim)':''}">${dirLabel}</span>
+      <span style="color:${confColor}">${hasSignal ? (r.confidence + '%') : '—'}</span>
+      <span style="color:var(--text-dim)">${r.price ? fmt(r.price) : '—'}</span>
+      <span style="color:var(--text-dim);font-size:9px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${esc(topReason.slice(0,40))}</span>
+    </div>`;
+  }).join('');
+
+  const activeCount = scan.signals_found || 0;
+  const sigBadge    = activeCount > 0 ? `<span style="color:var(--buy);margin-left:6px">${activeCount} SIGNAL${activeCount>1?'S':''} FOUND</span>` : `<span style="color:var(--text-dim);margin-left:6px">NO SIGNALS</span>`;
+
+  id('scanner-body').innerHTML = `
+    <div style="padding:16px">
+
+      <div class="sect-label" style="margin-bottom:6px">FUNDING RATES
+        <span style="font-size:9px;color:var(--text-dim);margin-left:8px;font-weight:normal">
+          +rate = bulls pay shorts → FADE LONGS · −rate = bears pay longs → FADE SHORTS
+        </span>
+      </div>
+      <div class="trade-row header" style="grid-template-columns:90px 80px 80px 70px 90px">
+        <span>SYMBOL</span><span>8H RATE</span><span>APR</span><span>BIAS</span><span>MARK PRICE</span>
+      </div>
+      ${frRows || '<div style="padding:8px;color:var(--text-dim);font-size:10px">No funding data</div>'}
+
+      <div class="sect-label" style="margin-top:18px;margin-bottom:6px">
+        MTF SIGNAL SCAN — ${esc(scan.primary_tf||'5m')}/${esc(scan.confirm_tf||'1h')} · ${scan.scanned||0} symbols${sigBadge}
+      </div>
+      <div class="trade-row header" style="grid-template-columns:90px 75px 55px 80px 1fr">
+        <span>SYMBOL</span><span>DIRECTION</span><span>CONF</span><span>PRICE</span><span>TOP FACTOR</span>
+      </div>
+      ${sigRows || '<div style="padding:8px;color:var(--text-dim);font-size:10px">No results</div>'}
+
+      <div style="margin-top:12px;font-size:9px;color:var(--text-dim);line-height:1.8">
+        Signal threshold: ≥65% confluence · ATR-based stops · Supertrend + ADX + MACD + StochRSI + VWAP + Volume<br>
+        Scanned: ${_SCAN_SYMBOLS.split(',').join(', ')}
+      </div>
+    </div>`;
+}
+
+id('scan-run-btn').addEventListener('click', loadScanner);
 
 // ── Status bar helpers ────────────────────────────────────────────────────────
 function setAction(msg) { id('sb-action').textContent = msg; }
