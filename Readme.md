@@ -1,341 +1,361 @@
-# 🚀 Binance Enhanced Trading Bot
+# Binance Futures Trading Bot
 
 <div align="center">
 
 ![Python](https://img.shields.io/badge/python-v3.8+-blue.svg)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Binance](https://img.shields.io/badge/exchange-Binance%20Futures-yellow.svg)
 ![Status](https://img.shields.io/badge/status-active-success.svg)
 
-*A comprehensive, feature-rich trading bot for Binance Futures with advanced order types, ML-powered analytics, and robust error handling.*
+*A full-stack algorithmic trading system for Binance Futures — multi-timeframe signal engine, news-driven auto-trading, ATR-based risk management, Telegram alerts, and a live terminal-style web UI.*
 
 </div>
 
-## 📋 Table of Contents
+---
 
-- [✨ Features](#-features)
-- [🏗️ Project Structure](#️-project-structure)
-- [🔧 Installation](#-installation)
-- [⚙️ Configuration](#️-configuration)
-- [🎯 Usage](#-usage)
-- [📊 ML Analytics](#-ml-analytics)
-- [📈 Order Types](#-order-types)
-- [🔒 Security](#-security)
-- [📝 Logging](#-logging)
-- [🤝 Contributing](#-contributing)
-- [📄 License](#-license)
+## Table of Contents
 
-## ✨ Features
+- [Features](#features)
+- [Architecture](#architecture)
+- [Project Structure](#project-structure)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Running the Bot](#running-the-bot)
+- [Web UI Tabs](#web-ui-tabs)
+- [API Endpoints](#api-endpoints)
+- [Risk Management](#risk-management)
+- [Telegram Notifications](#telegram-notifications)
+- [Security](#security)
+- [Disclaimer](#disclaimer)
 
-### 🎯 **Advanced Order Management**
-- **Market Orders** - Instant execution at current market prices
-- **Limit Orders** - Precise entry/exit at specific price levels
-- **OCO Orders** - One-Cancels-Other for risk management
-- **Stop-Limit Orders** - Advanced stop-loss with price protection
-- **TWAP Orders** - Time-Weighted Average Price execution
+---
 
-### 🧠 **ML-Powered Analytics**
-- **Technical Indicators**: SMA, EMA, RSI, MACD, Bollinger Bands
-- **Volume Analysis**: Volume ratios and trend detection
-- **Signal Generation**: Automated buy/sell signal recommendations
-- **Real-time Monitoring**: Live price tracking with comprehensive analysis
+## Features
 
-### 🛡️ **Enterprise-Grade Features**
-- **Comprehensive Validation**: Symbol, quantity, and price validation
-- **Error Handling**: Robust exception handling with detailed logging
-- **Dry Run Mode**: Test strategies without risking capital
-- **Configuration Validation**: Environment and script validation
-- **Structured Logging**: Detailed logs with rotation support
+### Web UI (Terminal-Style Dashboard)
+- Live BTC / ETH / SOL price tickers in the header, updated every 15 seconds
+- Five tabs: **ML Analytics**, **Signal Engine**, **Scanner**, **Trade Stats**, **News**
+- System log panel with ALL / INFO / WARN / ERR filters and live tail
+- Status bar: connection status, API key status, risk state, last action
 
-## 🏗️ Project Structure
+### Signal Engine
+- Multi-timeframe confluence analysis (primary TF + confirmation TF)
+- Indicators: **RSI**, **MACD**, **Bollinger Bands**, **ATR**, **Supertrend**, **VWAP**, **ADX**, **StochRSI**
+- Confidence score (0–100%) gating at configurable threshold (default 65%)
+- ATR-based stop-loss and take-profit calculation
+- Funding rate bias overlay (positive funding → SHORT bias, negative → LONG bias)
+
+### Market Scanner
+- Scan up to 10 symbols simultaneously with one click
+- Funding rates table: 8-hour rate, annualized APR, market bias per symbol
+- MTF signal scan table: direction, confidence, price, top confluence factor
+- Selectable primary TF and confirmation TF before scanning
+
+### News Auto-Trade
+- Monitors 15+ RSS feeds (CoinDesk, CoinTelegraph, Reuters, Bloomberg Crypto, Decrypt, etc.)
+- NLP keyword scoring: each headline scored for bullish/bearish sentiment per symbol
+- Automatically opens a futures position when score exceeds threshold
+- Auto-calculates TP and SL using ATR at time of entry
+- Auto-closes position on opposite signal or TP/SL hit
+- Sends Telegram alerts on entry, exit, and errors
+
+### Order Types
+| Type | Description |
+|------|-------------|
+| **Market** | Instant execution at current market price |
+| **Limit** | Precise entry/exit at a specific price |
+| **OCO** | One-Cancels-Other: profit target + stop loss in one shot |
+| **Stop-Limit** | Conditional execution with price protection |
+| **TWAP** | Time-Weighted Average Price — splits large orders into N parts over T seconds |
+
+### Risk Manager
+- **Per-trade risk**: size positions to risk exactly X% of equity (default 1%)
+- **Daily loss limit**: halt trading if daily P&L drops below threshold (default 5%)
+- **Max drawdown guard**: halt if equity drops >10% from peak
+- **Max open positions**: hard cap on concurrent trades (default 10)
+- **Min R:R ratio**: reject trades below minimum risk/reward (default 1.5)
+- **Trailing stop**: ATR-based ratchet stop that follows the position
+- State persists to `logs/risk_state.json` — survives restarts within the same day
+
+### Trade Tracker
+- SQLite-backed trade journal (`logs/trades.db`)
+- Equity curve endpoint for charting P&L over time
+- Trade Stats tab: total trades, win rate, avg P&L, open positions, equity chart
+
+### Telegram Notifications
+- Signal alerts (symbol, direction, confidence, entry/SL/TP)
+- Order filled confirmations
+- Trade closed summaries with P&L
+- Error alerts
+- Daily summary at 23:55 UTC (total trades, daily P&L, open positions)
+
+### Security
+- Rate limiting on all endpoints (slowapi)
+- Input validation and symbol whitelisting
+- API keys loaded exclusively from environment variables — never logged, never returned by API
+- Sanitized error responses (no stack traces exposed to clients)
+
+---
+
+## Architecture
+
+```
+Browser (index.html)
+        │  fetch / WebSocket
+        ▼
+  FastAPI  (api.py)  ── port 8000
+        │
+        ├── SignalEngine    (src/signal_engine.py)   multi-TF confluence
+        ├── NewsEngine      (src/news_engine.py)     RSS + NLP scoring
+        ├── RiskManager     (src/risk_manager.py)    sizing + drawdown guard
+        ├── TradeTracker    (src/trade_tracker.py)   SQLite journal
+        ├── TelegramNotifier(src/notifications.py)   async Telegram alerts
+        ├── StrategyEngine  (src/strategy_engine.py) auto-scan loop
+        └── Binance SDK     (binance-futures-connector)
+```
+
+---
+
+## Project Structure
 
 ```
 binance-trading-bot/
-├── 📁 src/
-│   ├── 🐍 bot.py                    # Main bot orchestrator
-│   ├── 🐍 market_orders.py          # Market order execution
-│   ├── 🐍 limit_orders.py           # Limit order management
-│   └── 📁 advanced/
-│       ├── 🐍 oco.py                # OCO order implementation
-│       ├── 🐍 stop_limit_orders.py  # Stop-limit functionality
-│       └── 🐍 twap.py               # TWAP execution engine
-├── 📁 logs/                         # Application logs
-│   └── 📄 bot.log                   # Main log file
-├── 📁 docs/                         # Documentation
-│   └── 📄 Binance Futures Order Bot.docx
-├── 📁 venv/                         # Virtual environment
-├── 📄 .env                          # Environment variables
-├── 📄 requirements.txt              # Python dependencies
-└── 📄 README.md                     # This file
+├── api.py                        # FastAPI backend — all endpoints + auto-trade loop
+├── config.json                   # Symbols, risk params, TWAP defaults, Telegram config
+├── requirements.txt
+├── frontend/
+│   └── index.html                # Single-file terminal web UI
+├── src/
+│   ├── signal_engine.py          # Multi-TF confluence signal generator
+│   ├── news_engine.py            # RSS feed fetcher + NLP scorer
+│   ├── risk_manager.py           # ATR sizing, drawdown guard, trailing stop
+│   ├── trade_tracker.py          # SQLite trade journal + equity curve
+│   ├── notifications.py          # Telegram async notifier
+│   ├── strategy_engine.py        # Symbol scan loop (strategy auto-mode)
+│   ├── market_orders.py          # CLI market order placer
+│   ├── limit_orders.py           # CLI limit order placer
+│   ├── bot.py                    # CLI orchestrator (legacy)
+│   └── advanced/
+│       ├── oco.py                # OCO order logic
+│       ├── stop_limit_orders.py  # Stop-limit logic
+│       └── twap.py               # TWAP execution engine
+├── logs/
+│   ├── trades.db                 # SQLite trade journal (auto-created)
+│   ├── risk_state.json           # Daily risk state (auto-created)
+│   └── bot.log                   # Application log
+└── docs/
 ```
 
-## 🔧 Installation
+---
+
+## Installation
 
 ### Prerequisites
 
-- **Python 3.8+** - [Download Python](https://python.org/downloads/)
-- **Binance Account** - [Create Account](https://binance.com/)
-- **API Keys** - [Generate API Keys](https://www.binance.com/en/my/settings/api-management)
+- Python 3.8+
+- Binance Futures account with API keys
 
-### Step 1: Clone Repository
+### 1. Clone the repo
 
 ```bash
-git clone https://github.com/kr4ter/binance-trading-bot.git
+git clone https://github.com/samarth080/binance-trading-bot.git
 cd binance-trading-bot
 ```
 
-### Step 2: Create Virtual Environment
+### 2. Create and activate a virtual environment
 
 ```bash
-# Create virtual environment
-python -m venv venv
-
-# Activate virtual environment
-# On Windows:
-venv\Scripts\activate
-# On macOS/Linux:
-source venv/bin/activate
+python3 -m venv venv
+source venv/bin/activate        # macOS / Linux
+# venv\Scripts\activate         # Windows
 ```
 
-### Step 3: Install Dependencies
+### 3. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### Step 4: Required Dependencies
+---
 
-```bash
-# Core dependencies
-pip install python-binance pandas python-dotenv
+## Configuration
 
-# Optional for enhanced features
-pip install numpy matplotlib seaborn
-```
+### .env file
 
-## ⚙️ Configuration
-
-### 1. Environment Setup
-
-Create a `.env` file in the root directory:
+Create a `.env` file in the project root:
 
 ```env
-# Binance API Configuration
+# Binance API
 BINANCE_API_KEY=your_api_key_here
 BINANCE_SECRET_KEY=your_secret_key_here
 
-# Optional: Testnet Configuration (recommended for testing)
-BINANCE_TESTNET=true
+# Set to false for live trading (true = testnet)
+USE_TESTNET=true
+
+# Telegram (optional — leave blank to disable notifications)
+TELEGRAM_BOT_TOKEN=your_bot_token
+TELEGRAM_CHAT_ID=your_chat_id
+
+# Risk overrides (optional — defaults shown)
+RISK_PER_TRADE_PCT=0.01
+MAX_DAILY_LOSS_PCT=0.05
+DRAWDOWN_HALT_PCT=0.10
+MAX_OPEN_POSITIONS=10
+MIN_RR_RATIO=1.5
 ```
 
-### 2. API Key Permissions
+### config.json
 
-Ensure your API keys have the following permissions:
-- ✅ **Futures Trading** - Required for order execution
-- ✅ **Read Info** - Required for account and market data
-- ❌ **Withdraw** - Not required (keep disabled for security)
+Key sections:
 
-### 3. IP Restrictions
+```json
+{
+  "strategy": {
+    "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT", ...],
+    "primary_tf": "5m",
+    "confirm_tf": "1h",
+    "scan_interval_seconds": 60
+  },
+  "risk": {
+    "risk_per_trade_pct": 0.01,
+    "max_daily_loss_pct": 0.03,
+    "drawdown_halt_pct": 0.10,
+    "max_open_positions": 3,
+    "min_rr_ratio": 1.5,
+    "atr_stop_multiplier": 1.6,
+    "atr_tp_multiplier": 2.8,
+    "trailing_atr_mult": 1.2
+  },
+  "twap": {
+    "default_parts": 5,
+    "default_interval": 60
+  }
+}
+```
 
-For enhanced security, restrict API access to your IP address in Binance settings.
+### Telegram setup
 
-## 🎯 Usage
+1. Message [@BotFather](https://t.me/BotFather) on Telegram → `/newbot` → copy the token
+2. Message [@userinfobot](https://t.me/userinfobot) → copy your chat ID
+3. Add both to `.env` as shown above
 
-### Basic Commands
+---
+
+## Running the Bot
 
 ```bash
-# Validate configuration
-python bot.py validate
-
-# Place market order
-python market_order.py BTCUSDT BUY 0.01
-
-# Place limit order
-python bot.py limit BTCUSDT BUY 0.01 50000
-# Advanced OCO order
-python bot.py oco BTCUSDT SELL 0.01 52000 48000 47500
-
-# Stop-limit order
-python bot.py stop_limit BTCUSDT SELL 0.01 49000 48500
-
-# TWAP order (divide into 10 parts, 60s intervals)
-python bot.py twap BTCUSDT BUY 0.1 10 60
+# Start the API server and web UI
+python3 api.py
 ```
+
+Then open [http://localhost:8000](http://localhost:8000) in your browser.
+
+The server runs on port 8000. The web UI is served from `frontend/index.html` at the root path.
+
+---
+
+## Web UI Tabs
 
 ### ML Analytics
+- Select symbol and timeframe, click **ANALYZE**
+- Returns RSI, MACD, Bollinger Bands, ATR, Supertrend, VWAP, ADX, StochRSI values
+- Shows buy/sell/neutral signal for each indicator
 
-```bash
-# Track BTC with default settings
-python bot.py ml_track
+### Signal Engine
+- Select symbol, primary TF, confirmation TF, click **RUN ANALYSIS**
+- Returns overall direction (LONG / SHORT / FLAT), confidence %, and the list of confluence reasons
+- Shows ATR-based stop-loss and take-profit levels
 
-# Track specific symbol with custom interval
-python bot.py ml_track ETHUSDT 5m
+### Scanner
+- Click **SCAN ALL** to scan all configured symbols in parallel
+- Top table: funding rates per symbol — rate, annualized APR, market bias
+- Bottom table: MTF signal per symbol — direction, confidence, price, top factor
+- Change timeframes using the dropdowns before scanning
 
-# Continuous monitoring
-python bot.py ml_track BTCUSDT 1m --continuous
-```
+### Trade Stats
+- Win rate, total trades, average P&L, current open positions
+- Equity curve chart (line chart of cumulative P&L over time)
 
-### Dry Run Mode
+### News
+- Live feed from 15+ crypto news sources
+- Each article scored for bullish/bearish sentiment per symbol
+- **Auto-Trade** toggle: when enabled, high-confidence news signals open real positions
 
-Test your strategies without risking capital:
+---
 
-```bash
-python market_orders.py BTCUSDT BUY 0.01 --dry-run
-python limit_orders.py BTCUSDT BUY 0.01 50000 --dry-run
-```
+## API Endpoints
 
-## 📊 ML Analytics
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/status` | Server health, API key presence, testnet mode |
+| GET | `/api/ml/analyze` | Run ML indicator analysis for a symbol |
+| GET | `/api/signal` | Run MTF signal engine for a symbol |
+| GET | `/api/signal/scan_multi` | Scan multiple symbols simultaneously |
+| GET | `/api/funding` | Funding rates + market bias for symbol list |
+| GET | `/api/prices` | Lightweight multi-symbol price fetch |
+| GET | `/api/positions/live` | Live open positions from Binance exchange |
+| GET | `/api/stats` | Trade statistics (win rate, P&L, open positions) |
+| GET | `/api/stats/equity_curve` | Equity curve data for charting |
+| GET | `/api/risk/status` | Current risk manager state |
+| GET | `/api/news` | Latest news articles with sentiment scores |
+| GET | `/api/news/signals` | High-confidence news-driven signals |
+| GET | `/api/logs` | Last N lines of system log |
+| POST | `/api/order/market` | Place a market order |
+| POST | `/api/order/limit` | Place a limit order |
+| POST | `/api/order/oco` | Place an OCO order |
+| POST | `/api/order/stop_limit` | Place a stop-limit order |
+| POST | `/api/order/twap` | Start a TWAP execution |
+| POST | `/api/news/auto_trade` | Trigger news-based auto-trade evaluation |
 
-### Available Indicators
+---
 
-| Indicator | Description | Signal Generation |
-|-----------|-------------|-------------------|
-| **SMA** | Simple Moving Average (5, 10, 20) | Trend identification |
-| **EMA** | Exponential Moving Average (12, 26) | Responsive trend analysis |
-| **RSI** | Relative Strength Index | Overbought/oversold detection |
-| **MACD** | Moving Average Convergence Divergence | Momentum analysis |
-| **Bollinger Bands** | Price volatility bands | Support/resistance levels |
-| **Volume Analysis** | Volume ratio and trends | Market strength confirmation |
+## Risk Management
 
-### Sample ML Output
+The `RiskManager` (`src/risk_manager.py`) enforces five rules on every trade:
 
-```
-📊 BTCUSDT Analysis - 2024-01-15 14:30:25
-============================================================
-💰 Current Price: $51,234.56
-📈 24h Change: +2.45%
+1. **Position sizing** — risk exactly `RISK_PER_TRADE_PCT` of current equity per trade, using ATR stop distance to back-calculate quantity
+2. **Daily loss limit** — if cumulative daily P&L falls below `MAX_DAILY_LOSS_PCT × equity`, all trading halts for the rest of the day
+3. **Drawdown guard** — if equity falls more than `DRAWDOWN_HALT_PCT` from its all-time peak, trading halts
+4. **Open position cap** — no new trades if `open_positions >= MAX_OPEN_POSITIONS`
+5. **Minimum R:R** — trades with `TP distance / SL distance < MIN_RR_RATIO` are rejected before any order is sent
 
-📋 Technical Indicators:
-  SMA_5: $51,100.23
-  SMA_20: $50,800.45
-  RSI: 68.45
-  MACD: 45.67
-  BB_UPPER: $52,000.00
-  BB_LOWER: $49,500.00
+State is persisted to `logs/risk_state.json` so limits survive server restarts within the same trading day.
 
-🎯 Trading Signals:
-  🟢 SMA 5 Trend: BULLISH
-  🟢 SMA 20 Trend: BULLISH
-  🔴 RSI Signal: OVERBOUGHT
-  🟢 MACD Signal: BULLISH
-  🟡 BB Signal: NEUTRAL
+---
 
-🔍 Overall Assessment:
-  📈 BULLISH BIAS - Consider long positions
-============================================================
-```
+## Telegram Notifications
 
-## 📈 Order Types
+When `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set in `.env`, the bot sends:
 
-### Market Orders
-- **Instant execution** at current market price
-- **Best for**: Quick entries/exits
-- **Risk**: Price slippage in volatile markets
+- **Signal alert** — when a news-driven signal passes confidence threshold
+- **Order filled** — symbol, direction, entry price, SL, TP, quantity, risk amount
+- **Trade closed** — symbol, exit price, P&L in USDT
+- **Error alert** — if an auto-trade attempt fails
+- **Daily summary** — sent at 23:55 UTC: trades today, daily P&L, open positions
 
-### Limit Orders
-- **Precise price control** with guaranteed execution price
-- **Best for**: Planned entries at specific levels
-- **Risk**: May not execute if price doesn't reach limit
+All Telegram calls are fire-and-forget (daemon threads) — a Telegram outage never blocks order execution.
 
-### OCO Orders (One-Cancels-Other)
-- **Dual order system** with profit target and stop loss
-- **Best for**: Risk management with automatic execution
-- **Risk**: Requires careful price level selection
+---
 
-### Stop-Limit Orders
-- **Conditional execution** with price protection
-- **Best for**: Advanced risk management
-- **Risk**: Gap risk in volatile markets
+## Security
 
-### TWAP Orders (Time-Weighted Average Price)
-- **Gradual execution** to minimize market impact
-- **Best for**: Large positions without moving the market
-- **Risk**: Extended execution time
+- All API keys are loaded from environment variables only — never hardcoded, never returned by any endpoint
+- Rate limiting applied to all endpoints via `slowapi` (configurable via env vars)
+- All symbol and interval inputs are validated against a whitelist before being used in any Binance API call
+- Error responses return sanitized messages only — no Python tracebacks exposed to the client
+- `USE_TESTNET=true` by default — you must explicitly set it to `false` to trade on mainnet
 
-## 🔒 Security
+---
 
-### Best Practices
+## Disclaimer
 
-1. **API Key Security**
-   - Never commit API keys to version control
-   - Use environment variables for sensitive data
-   - Enable IP restrictions on Binance
+**This software is for educational and research purposes only. Cryptocurrency trading carries a high level of risk and may not be suitable for all investors. Past performance is not indicative of future results. Never trade with funds you cannot afford to lose. The authors are not responsible for any financial losses incurred through the use of this software.**
 
-2. **Testnet First**
-   - Always test strategies on Binance Testnet
-   - Validate all parameters before live trading
-   - Use dry-run mode for initial testing
-
-3. **Risk Management**
-   - Start with small position sizes
-   - Set appropriate stop-losses
-   - Monitor positions regularly
-
-## 📝 Logging
-
-### Log Levels
-
-- **INFO**: General operation information
-- **WARNING**: Important notices that don't stop execution
-- **ERROR**: Errors that prevent specific operations
-- **CRITICAL**: System-level failures
-
-### Log Files
-
-```
-logs/
-├── bot.log          # Main application logs
-└── orders.log       # Order execution logs (if enabled)
-```
-
-### Sample Log Entry
-
-```
-[2024-01-15 14:30:25] INFO [MarketOrderBot]: ✅ MARKET BUY order placed successfully
-[2024-01-15 14:30:25] INFO [MarketOrderBot]: Order Details - ID: 123456789, Status: FILLED, Executed: 0.01
-```
-
-## 🤝 Contributing
-
-We welcome contributions! Please follow these guidelines:
-
-1. **Fork the repository**
-2. **Create a feature branch**: `git checkout -b feature/amazing-feature`
-3. **Commit changes**: `git commit -m 'Add amazing feature'`
-4. **Push to branch**: `git push origin feature/amazing-feature`
-5. **Open a Pull Request**
-
-### Development Setup
-
-```bash
-# Install development dependencies
-pip install -r requirements-dev.txt
-
-# Run tests
-python -m pytest tests/
-
-# Code formatting
-black src/
-flake8 src/
-```
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## ⚠️ Disclaimer
-
-**This bot is for educational purposes only. Trading cryptocurrency involves substantial risk of loss. Always:**
-
-- Start with small amounts
-- Use testnet for initial testing
-- Understand the risks involved
-- Never invest more than you can afford to lose
-- The developers are not responsible for any financial losse
+Always test thoroughly on Binance Testnet (`USE_TESTNET=true`) before enabling live trading.
 
 ---
 
 <div align="center">
-
-
+Built with FastAPI · Binance Futures Connector · pandas · asyncio
 </div>
