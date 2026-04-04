@@ -3,7 +3,7 @@ Binance Bot API Server
 FastAPI wrapper around the existing bot modules.
 
 Requirements:
-  pip install fastapi uvicorn[standard]
+  pip install fastapi uvicorn[standard] slowapi
 
 Usage (from project root):
   python api.py
@@ -12,6 +12,7 @@ Usage (from project root):
 import asyncio
 import logging
 import os
+import secrets
 import sys
 from collections import deque
 from datetime import datetime
@@ -24,23 +25,53 @@ from dotenv import find_dotenv, load_dotenv
 _dotenv = find_dotenv(usecwd=True)
 load_dotenv(_dotenv or (Path(__file__).parent / ".env"))
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator, model_validator
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 import uvicorn
 
 # Add src/ to path so bot modules are importable
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
+# ── Rate limiter (keyed by client IP) ─────────────────────────────────────────
+# Why: prevents a misbehaving client or accidental loop from burning through
+# Binance's rate limits or causing unintended mass order placement.
+limiter = Limiter(key_func=get_remote_address)
+
 # ── App ────────────────────────────────────────────────────────────────────────
-app = FastAPI(title="Binance Bot API", version="1.0.0")
+app = FastAPI(title="Binance Bot API", version="1.0.0", docs_url=None, redoc_url=None)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# ── CORS — restrict to localhost only ─────────────────────────────────────────
+# Why: allow_origins=["*"] lets any webpage on the internet trigger trades by
+# making cross-origin requests.  We only serve a local dashboard, so lock it.
+_ALLOWED_ORIGINS = [o.strip() for o in
+                    os.getenv("ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000").split(",")]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+# ── Optional API-key auth for all /api/* routes ───────────────────────────────
+# Set UI_API_KEY in .env to require this header from the browser.
+# Why: without auth, anyone on your LAN (or port-forwarded internet) can trade.
+_UI_API_KEY: Optional[str] = os.getenv("UI_API_KEY") or None
+
+async def _require_auth(request: Request):
+    """Dependency — call on every trading endpoint."""
+    if _UI_API_KEY is None:
+        return  # auth disabled (local-only use)
+    provided = request.headers.get("X-API-Key", "")
+    # secrets.compare_digest prevents timing attacks
+    if not provided or not secrets.compare_digest(provided, _UI_API_KEY):
+        raise HTTPException(401, "Unauthorized")
 
 # ── In-memory log buffer ───────────────────────────────────────────────────────
 log_buffer: deque = deque(maxlen=500)
@@ -67,49 +98,174 @@ logging.getLogger().setLevel(logging.INFO)
 
 api_log = logging.getLogger("bnce-api")
 
-# ── Pydantic request models ────────────────────────────────────────────────────
+# ── Input validation helpers ───────────────────────────────────────────────────
+# Why: never trust client-supplied strings — sanitize before they reach the
+# exchange or logs.  A malformed symbol or negative quantity must be rejected
+# here, not inside Binance's SDK where the error message leaks internals.
+
+import re as _re
+_SYMBOL_RE = _re.compile(r'^[A-Z0-9]{3,20}$')
+_VALID_SIDES = {"BUY", "SELL"}
+_MAX_QUANTITY  = 1_000.0   # hard upper cap — prevents accidental full-balance wipes
+_MAX_PRICE     = 10_000_000.0
+
+def _clean_symbol(v: str) -> str:
+    v = v.upper().strip()
+    if not _SYMBOL_RE.match(v):
+        raise HTTPException(400, f"Invalid symbol — must be 3-20 uppercase alphanumeric characters")
+    return v
+
+def _clean_side(v: str) -> str:
+    v = v.upper().strip()
+    if v not in _VALID_SIDES:
+        raise ValueError(f"Side must be BUY or SELL, got '{v}'")
+    return v
+
+def _positive(v: float, name: str = "value") -> float:
+    if v <= 0:
+        raise ValueError(f"{name} must be positive, got {v}")
+    if v > _MAX_PRICE:
+        raise ValueError(f"{name} {v} exceeds maximum allowed {_MAX_PRICE}")
+    return v
+
+def _safe_qty(v: float) -> float:
+    if v <= 0:
+        raise ValueError(f"quantity must be positive, got {v}")
+    if v > _MAX_QUANTITY:
+        raise ValueError(f"quantity {v} exceeds safety cap of {_MAX_QUANTITY}")
+    return v
+
+# ── Pydantic request models (with full validation) ────────────────────────────
 
 class MarketOrderReq(BaseModel):
-    symbol: str
-    side: str
+    symbol:   str
+    side:     str
     quantity: float
-    dry_run: bool = False
+    dry_run:  bool = False
+
+    @field_validator("symbol")
+    @classmethod
+    def val_symbol(cls, v): return _clean_symbol(v)
+
+    @field_validator("side")
+    @classmethod
+    def val_side(cls, v): return _clean_side(v)
+
+    @field_validator("quantity")
+    @classmethod
+    def val_qty(cls, v): return _safe_qty(v)
 
 
 class LimitOrderReq(BaseModel):
-    symbol: str
-    side: str
+    symbol:   str
+    side:     str
     quantity: float
-    price: float
-    dry_run: bool = False
+    price:    float
+    dry_run:  bool = False
+
+    @field_validator("symbol")
+    @classmethod
+    def val_symbol(cls, v): return _clean_symbol(v)
+
+    @field_validator("side")
+    @classmethod
+    def val_side(cls, v): return _clean_side(v)
+
+    @field_validator("quantity")
+    @classmethod
+    def val_qty(cls, v): return _safe_qty(v)
+
+    @field_validator("price")
+    @classmethod
+    def val_price(cls, v): return _positive(v, "price")
 
 
 class OCOOrderReq(BaseModel):
-    symbol: str
-    side: str
-    quantity: float
-    price: float
-    stop_price: float
+    symbol:           str
+    side:             str
+    quantity:         float
+    price:            float
+    stop_price:       float
     stop_limit_price: float
-    dry_run: bool = False
+    dry_run:          bool = False
+
+    @field_validator("symbol")
+    @classmethod
+    def val_symbol(cls, v): return _clean_symbol(v)
+
+    @field_validator("side")
+    @classmethod
+    def val_side(cls, v): return _clean_side(v)
+
+    @field_validator("quantity")
+    @classmethod
+    def val_qty(cls, v): return _safe_qty(v)
+
+    @field_validator("price", "stop_price", "stop_limit_price")
+    @classmethod
+    def val_prices(cls, v): return _positive(v, "price field")
 
 
 class StopLimitOrderReq(BaseModel):
-    symbol: str
-    side: str
-    quantity: float
+    symbol:     str
+    side:       str
+    quantity:   float
     stop_price: float
-    price: float
-    dry_run: bool = False
+    price:      float
+    dry_run:    bool = False
+
+    @field_validator("symbol")
+    @classmethod
+    def val_symbol(cls, v): return _clean_symbol(v)
+
+    @field_validator("side")
+    @classmethod
+    def val_side(cls, v): return _clean_side(v)
+
+    @field_validator("quantity")
+    @classmethod
+    def val_qty(cls, v): return _safe_qty(v)
+
+    @field_validator("price", "stop_price")
+    @classmethod
+    def val_prices(cls, v): return _positive(v, "price field")
 
 
 class TWAPOrderReq(BaseModel):
-    symbol: str
-    side: str
-    total_quantity: float
-    parts: int
+    symbol:           str
+    side:             str
+    total_quantity:   float
+    parts:            int
     interval_seconds: int
-    dry_run: bool = False
+    dry_run:          bool = False
+
+    @field_validator("symbol")
+    @classmethod
+    def val_symbol(cls, v): return _clean_symbol(v)
+
+    @field_validator("side")
+    @classmethod
+    def val_side(cls, v): return _clean_side(v)
+
+    @field_validator("total_quantity")
+    @classmethod
+    def val_qty(cls, v): return _safe_qty(v)
+
+    @field_validator("parts")
+    @classmethod
+    def val_parts(cls, v):
+        # Why: unbounded parts = unlimited orders; cap at 20 per TWAP run
+        if not (1 <= v <= 20):
+            raise ValueError("parts must be between 1 and 20")
+        return v
+
+    @field_validator("interval_seconds")
+    @classmethod
+    def val_interval(cls, v):
+        # Why: minimum 5s prevents accidental burst; max 1h keeps it sane
+        if not (5 <= v <= 3600):
+            raise ValueError("interval_seconds must be between 5 and 3600")
+        return v
 
 
 # ── Lazy bot singletons ────────────────────────────────────────────────────────
@@ -142,9 +298,21 @@ def _get_news_engine():
 def _news_auto_execute(sig):
     """
     Called by NewsEngine when auto_trade=True and |score| >= threshold.
-    Places a market order sized at minimum notional ($100) for the news signal.
+    Places a market order sized at minimum notional ($150) for the news signal.
+    Enforces RiskManager checks before placing any order.
     """
     try:
+        # ── Risk gate ── Why: auto-trade fires from a background thread with no
+        # human in the loop.  Without this check it ignores daily loss limits,
+        # open-position caps, and drawdown halts.
+        from risk_manager import RiskManager
+        rm = RiskManager()
+        if not rm.is_trading_allowed():
+            api_log.warning(
+                f"NEWS AUTO-TRADE blocked by RiskManager: {sig.direction} {sig.symbol}"
+            )
+            return
+
         from binance.um_futures import UMFutures
         use_testnet = os.getenv("USE_TESTNET", "true").lower() == "true"
         base_url = "https://testnet.binancefuture.com" if use_testnet else "https://fapi.binance.com"
@@ -154,8 +322,12 @@ def _news_auto_execute(sig):
             base_url=base_url,
         )
 
-        # Size: ~$150 notional (well above $100 minimum)
         mark_px = float(client.ticker_price(symbol=sig.symbol)["price"])
+        if mark_px <= 0:
+            api_log.error("NEWS AUTO-TRADE: invalid mark price, aborting")
+            return
+
+        # ~$150 notional — above Binance $100 minimum, bounded away from full balance
         qty = round(150.0 / mark_px, 3)
         if qty <= 0:
             return
@@ -170,6 +342,7 @@ def _news_auto_execute(sig):
         if avg == 0:
             avg = mark_px
         _record_fill(sig.symbol, sig.direction, qty, avg, str(result.get("orderId", "")))
+        rm.record_trade_open()
         api_log.info(
             f"NEWS AUTO-TRADE: {sig.direction} {qty} {sig.symbol} @ {avg:.2f} "
             f"| score={sig.score:+.0f} | '{sig.headline[:50]}'"
@@ -283,23 +456,42 @@ def _limit():
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
+# Validated intervals for ML/signal endpoints — whitelist prevents open-ended
+# string injection into the Binance klines API call.
+_VALID_INTERVALS = {"1m","3m","5m","15m","30m","1h","2h","4h","6h","8h","12h","1d","3d","1w","1M"}
+
+def _safe_interval(v: str) -> str:
+    if v not in _VALID_INTERVALS:
+        raise HTTPException(400, f"Invalid interval '{v}'. Must be one of: {', '.join(sorted(_VALID_INTERVALS))}")
+    return v
+
+def _safe_limit(v: int, lo: int = 1, hi: int = 200) -> int:
+    if not (lo <= v <= hi):
+        raise HTTPException(400, f"limit must be {lo}–{hi}")
+    return v
+
+
 @app.get("/api/status")
-async def status():
+@limiter.limit("30/minute")
+async def status(request: Request):
+    # Why: never expose even a partial key — the preview is not needed by the UI
+    # and any log scraper that captures responses would harvest it.
     api_key = os.getenv("BINANCE_API_KEY", "")
     secret  = os.getenv("BINANCE_SECRET_KEY", "")
     testnet = os.getenv("USE_TESTNET", "true").lower() == "true"
     api_log.info(f"Status check — testnet={testnet} key_set={bool(api_key)}")
     return {
-        "api_key_set":     bool(api_key),
-        "secret_key_set":  bool(secret),
-        "testnet":         testnet,
-        "api_key_preview": (api_key[:8] + "…") if api_key else None,
-        "timestamp":       datetime.now().isoformat(),
+        "api_key_set":    bool(api_key),
+        "secret_key_set": bool(secret),
+        "testnet":        testnet,
+        "timestamp":      datetime.now().isoformat(),
     }
 
 
 @app.post("/api/order/market")
-async def market_order(req: MarketOrderReq):
+@limiter.limit("10/minute")   # Why: hard cap — prevents runaway loops placing dozens of orders
+async def market_order(request: Request, req: MarketOrderReq):
+    await _require_auth(request)
     api_log.info(f"MARKET {req.side} {req.quantity} {req.symbol} dry={req.dry_run}")
     bot = _market()
     if req.dry_run:
@@ -315,7 +507,9 @@ async def market_order(req: MarketOrderReq):
 
 
 @app.post("/api/order/limit")
-async def limit_order(req: LimitOrderReq):
+@limiter.limit("10/minute")
+async def limit_order(request: Request, req: LimitOrderReq):
+    await _require_auth(request)
     api_log.info(f"LIMIT {req.side} {req.quantity} {req.symbol} @ {req.price} dry={req.dry_run}")
     bot = _limit()
     if req.dry_run:
@@ -326,15 +520,16 @@ async def limit_order(req: LimitOrderReq):
     result = bot.place_limit_order(req.symbol, req.side, req.quantity, req.price)
     if not result:
         raise HTTPException(400, "Order failed — see logs")
-    # Only record when actually filled — a NEW order is resting on the book, not executed
-    status = result.get("status", "")
-    if status in ("FILLED", "PARTIALLY_FILLED"):
+    order_status = result.get("status", "")
+    if order_status in ("FILLED", "PARTIALLY_FILLED"):
         _record_fill(req.symbol, req.side, req.quantity, req.price, result.get("orderId",""))
     return {"success": True, "order": result}
 
 
 @app.post("/api/order/oco")
-async def oco_order(req: OCOOrderReq):
+@limiter.limit("10/minute")
+async def oco_order(request: Request, req: OCOOrderReq):
+    await _require_auth(request)
     api_log.info(f"OCO {req.side} {req.quantity} {req.symbol} dry={req.dry_run}")
     try:
         from advanced.oco import BinanceOCOBot
@@ -349,17 +544,19 @@ async def oco_order(req: OCOOrderReq):
         raise HTTPException(503, "OCO bot could not connect — check keys")
     except Exception as exc:
         api_log.error(f"OCO error: {exc}")
-        raise HTTPException(500, str(exc))
+        # Why: never echo raw exc to client — it may contain internal paths or Binance internals
+        raise HTTPException(500, "OCO order failed — see server logs")
 
 
 @app.post("/api/order/stop_limit")
-async def stop_limit_order(req: StopLimitOrderReq):
+@limiter.limit("10/minute")
+async def stop_limit_order(request: Request, req: StopLimitOrderReq):
+    await _require_auth(request)
     api_log.info(f"STOP-LIMIT {req.side} {req.quantity} {req.symbol} stop={req.stop_price} lim={req.price}")
 
-    # Pre-flight: Binance Futures requires notional ≥ $100
     notional = req.quantity * req.price
     if notional < 100:
-        min_qty = round(100 / req.price * 1.05, 3)   # 5 % buffer
+        min_qty = round(100 / req.price * 1.05, 3)
         raise HTTPException(
             400,
             f"Order notional ${notional:.2f} is below the $100 Binance Futures minimum. "
@@ -369,6 +566,7 @@ async def stop_limit_order(req: StopLimitOrderReq):
     try:
         from binance.um_futures import UMFutures
         from advanced.stop_limit_orders import StopLimitOrderHandler
+        import threading, time
 
         _use_testnet = os.getenv("USE_TESTNET", "true").lower() == "true"
         _base_url = "https://testnet.binancefuture.com" if _use_testnet else "https://fapi.binance.com"
@@ -384,12 +582,7 @@ async def stop_limit_order(req: StopLimitOrderReq):
                 req.symbol.upper(), req.side.upper(),
                 req.quantity, req.stop_price, req.price,
             )
-            return {"dry_run": True, "valid": valid,
-                    "notional": round(notional, 2)}
-
-        # Testnet blocks STOP order type (-4120). Use server-side monitor instead:
-        # watch mark price in background; when stop_price is hit, fire a MARKET order.
-        import threading, time
+            return {"dry_run": True, "valid": valid, "notional": round(notional, 2)}
 
         symbol_u = req.symbol.upper()
         side_u   = req.side.upper()
@@ -427,7 +620,6 @@ async def stop_limit_order(req: StopLimitOrderReq):
     except HTTPException:
         raise
     except Exception as exc:
-        # Surface Binance -4164 notional error explicitly
         msg = str(exc)
         if "-4164" in msg or "notional" in msg.lower():
             min_qty = round(100 / req.price * 1.05, 3)
@@ -437,12 +629,13 @@ async def stop_limit_order(req: StopLimitOrderReq):
                 f"Use quantity ≥ {min_qty} at this price."
             )
         api_log.error(f"Stop-limit error: {exc}")
-        raise HTTPException(500, msg)
+        raise HTTPException(500, "Stop-limit order failed — see server logs")
 
 
 @app.post("/api/order/twap")
-async def twap_order(req: TWAPOrderReq):
-    """Splits total_quantity into `parts` market orders spaced `interval_seconds` apart."""
+@limiter.limit("5/minute")   # Why: TWAP spawns multiple sub-orders; stricter cap
+async def twap_order(request: Request, req: TWAPOrderReq):
+    await _require_auth(request)
     part_qty = req.total_quantity / req.parts
     api_log.info(f"TWAP {req.parts}× {part_qty:.6f} {req.symbol} every {req.interval_seconds}s dry={req.dry_run}")
 
@@ -467,7 +660,6 @@ async def twap_order(req: TWAPOrderReq):
         if i < req.parts - 1:
             await asyncio.sleep(req.interval_seconds)
 
-    # Record the whole TWAP as one trade at the weighted avg price
     if executed > 0:
         avg_fill = total_value / (part_qty * executed)
         _record_fill(req.symbol, req.side, part_qty * executed, avg_fill)
@@ -476,7 +668,10 @@ async def twap_order(req: TWAPOrderReq):
 
 
 @app.get("/api/ml/analyze")
-async def ml_analyze(symbol: str = "BTCUSDT", interval: str = "1m"):
+@limiter.limit("20/minute")
+async def ml_analyze(request: Request, symbol: str = "BTCUSDT", interval: str = "1m"):
+    symbol   = _clean_symbol(symbol)
+    interval = _safe_interval(interval)
     try:
         import pandas as pd
         from binance.um_futures import UMFutures
@@ -549,12 +744,16 @@ async def ml_analyze(symbol: str = "BTCUSDT", interval: str = "1m"):
         }
     except Exception as exc:
         api_log.error(f"ML analysis failed: {exc}")
-        raise HTTPException(500, str(exc))
+        raise HTTPException(500, "Analysis failed — see server logs")
 
 
 @app.get("/api/signal")
-async def signal_scan(symbol: str = "BTCUSDT", primary_tf: str = "5m", confirm_tf: str = "1h"):
+@limiter.limit("12/minute")
+async def signal_scan(request: Request, symbol: str = "BTCUSDT", primary_tf: str = "5m", confirm_tf: str = "1h"):
     """Run the advanced multi-timeframe signal engine."""
+    symbol     = _clean_symbol(symbol)
+    primary_tf = _safe_interval(primary_tf)
+    confirm_tf = _safe_interval(confirm_tf)
     try:
         import pandas as pd
         from binance.um_futures import UMFutures
@@ -608,11 +807,12 @@ async def signal_scan(symbol: str = "BTCUSDT", primary_tf: str = "5m", confirm_t
         }
     except Exception as exc:
         api_log.error(f"Signal scan failed: {exc}")
-        raise HTTPException(500, str(exc))
+        raise HTTPException(500, "Signal scan failed — see server logs")
 
 
 @app.get("/api/stats")
-async def trade_stats():
+@limiter.limit("30/minute")
+async def trade_stats(request: Request):
     """Return trade statistics from the SQLite tracker, including open positions."""
     try:
         from trade_tracker import TradeTracker
@@ -683,17 +883,18 @@ async def trade_stats():
         }
     except Exception as exc:
         api_log.error(f"Stats failed: {exc}")
-        raise HTTPException(500, str(exc))
+        raise HTTPException(500, "Stats unavailable — see server logs")
 
 
 @app.get("/api/stats/equity_curve")
-async def equity_curve():
+@limiter.limit("30/minute")
+async def equity_curve(request: Request):
     """Return cumulative PnL series for charting."""
     try:
         from trade_tracker import TradeTracker
         tracker = TradeTracker()
         trades  = tracker.get_closed_trades(limit=500)
-        trades  = list(reversed(trades))   # oldest first
+        trades  = list(reversed(trades))
         cum = 0.0
         points = []
         for t in trades:
@@ -708,11 +909,12 @@ async def equity_curve():
         return {"points": points, "total": round(cum, 4)}
     except Exception as exc:
         api_log.error(f"Equity curve failed: {exc}")
-        raise HTTPException(500, str(exc))
+        raise HTTPException(500, "Equity curve unavailable — see server logs")
 
 
 @app.get("/api/risk/status")
-async def risk_status():
+@limiter.limit("30/minute")
+async def risk_status(request: Request):
     """Return current risk manager state."""
     try:
         from risk_manager import RiskManager
@@ -720,11 +922,15 @@ async def risk_status():
         return rm.status()
     except Exception as exc:
         api_log.error(f"Risk status failed: {exc}")
-        raise HTTPException(500, str(exc))
+        raise HTTPException(500, "Risk status unavailable — see server logs")
 
 
 @app.get("/api/logs")
-async def get_logs(limit: int = 100):
+@limiter.limit("60/minute")
+async def get_logs(request: Request, limit: int = 100):
+    # Why: cap at 500 — returning the full deque via a tight loop would be a
+    # trivial DoS by keeping the server busy serialising large payloads.
+    limit = max(1, min(limit, 500))
     return {"logs": list(log_buffer)[-limit:]}
 
 
@@ -737,8 +943,10 @@ async def _startup():
 
 
 @app.get("/api/news")
-async def get_news(limit: int = 30):
+@limiter.limit("30/minute")
+async def get_news(request: Request, limit: int = 30):
     """Return recent news items with sentiment scores."""
+    limit  = _safe_limit(limit, 1, 100)
     engine = _get_news_engine()
     if not engine:
         raise HTTPException(503, "News engine unavailable")
@@ -758,14 +966,16 @@ async def get_news(limit: int = 30):
                 "symbols":   n.symbols,
                 "ts":        n.ts,
             }
-            for n in reversed(items)   # newest first
+            for n in reversed(items)
         ],
     }
 
 
 @app.get("/api/news/signals")
-async def get_news_signals(limit: int = 20):
+@limiter.limit("30/minute")
+async def get_news_signals(request: Request, limit: int = 20):
     """Return recent news-triggered trade signals."""
+    limit  = _safe_limit(limit, 1, 50)
     engine = _get_news_engine()
     if not engine:
         raise HTTPException(503, "News engine unavailable")
@@ -789,12 +999,16 @@ async def get_news_signals(limit: int = 20):
 
 
 @app.post("/api/news/auto_trade")
-async def set_auto_trade(enabled: bool):
+@limiter.limit("10/minute")
+async def set_auto_trade(request: Request, enabled: bool):
     """Enable or disable automatic trade execution on news signals."""
+    # Why: this directly controls live trade execution — must require auth
+    await _require_auth(request)
     engine = _get_news_engine()
     if not engine:
         raise HTTPException(503, "News engine unavailable")
     engine.set_auto_trade(enabled)
+    api_log.info(f"News auto-trade toggled: {'ENABLED' if enabled else 'DISABLED'}")
     return {"auto_trade": enabled, "message": f"News auto-trade {'ENABLED' if enabled else 'DISABLED'}"}
 
 

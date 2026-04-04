@@ -90,14 +90,10 @@ class MarketOrderBot:
                           os.getenv("BINANCE_SECRET") or
                           os.getenv("BINANCE_FUTURES_SECRET_KEY"))
         
-        # Debug: Print what we found (partially masked)
+        # Log presence only — never log key content, even partially
+        # Why: partial keys in logs can be combined with other leaks to reconstruct the full key
         print(f"🔑 API Key found: {'✅' if self.api_key else '❌'}")
         print(f"🔐 Secret Key found: {'✅' if self.secret_key else '❌'}")
-        
-        if self.api_key:
-            print(f"🔑 API Key (first 8 chars): {self.api_key[:8]}...")
-        if self.secret_key:
-            print(f"🔐 Secret Key (first 8 chars): {self.secret_key[:8]}...")
         
         if not self.api_key or not self.secret_key:
             print("\n❌ API credentials not found!")
