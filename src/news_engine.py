@@ -134,7 +134,7 @@ COIN_MAP: Dict[str, str] = {
     " link":     "LINKUSDT",
 }
 
-SIGNAL_THRESHOLD  = 55    # |score| must exceed this to emit a trade signal
+SIGNAL_THRESHOLD  = 30    # |score| must exceed this to emit a trade signal
 MAX_RECENT_NEWS   = 100   # news items to keep in memory
 
 
