@@ -11,12 +11,13 @@ Architecture:
 No external API key required — uses free RSS feeds.
 """
 
+import calendar
 import hashlib
 import logging
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Callable, Dict, List, Optional
 from collections import deque
 
@@ -37,7 +38,9 @@ RSS_FEEDS = [
     ("The Block",      "https://www.theblock.co/rss.xml"),
 ]
 
-POLL_INTERVAL = 120   # seconds between feed polls
+POLL_INTERVAL        = 30    # seconds between feed polls (was 120 — faster = fresher news)
+MAX_ARTICLE_AGE_MIN  = 10   # ignore articles older than this many minutes
+SYMBOL_COOLDOWN_SEC  = 120  # don't fire two signals on the same symbol within this window
 
 # ── Keyword sentiment weights ─────────────────────────────────────────────────
 BULLISH_KEYWORDS: Dict[str, int] = {
@@ -179,14 +182,16 @@ class NewsEngine:
                  on_signal: Optional[Callable[[NewsSignal], None]] = None,
                  default_symbol: str = "BTCUSDT",
                  auto_trade: bool = False):
-        self._on_signal     = on_signal
-        self._default_sym   = default_symbol
-        self._auto_trade    = auto_trade
-        self._seen_uids     = set()
-        self._news_buf      = deque(maxlen=MAX_RECENT_NEWS)
-        self._signals_buf   = deque(maxlen=50)
-        self._running       = False
-        self._thread        = None
+        self._on_signal        = on_signal
+        self._default_sym      = default_symbol
+        self._auto_trade       = auto_trade
+        self._seen_uids        = set()
+        self._news_buf         = deque(maxlen=MAX_RECENT_NEWS)
+        self._signals_buf      = deque(maxlen=50)
+        self._running          = False
+        self._thread           = None
+        # Per-symbol cooldown: symbol → epoch seconds of last signal emitted
+        self._last_signal_ts: Dict[str, float] = {}
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -224,26 +229,59 @@ class NewsEngine:
                     break
                 time.sleep(1)
 
+    @staticmethod
+    def _parse_pub_dt(entry) -> Optional[datetime]:
+        """Return UTC-aware datetime from feedparser entry, or None if unparseable."""
+        # feedparser gives published_parsed as a time.struct_time in UTC
+        pt = entry.get("published_parsed") or entry.get("updated_parsed")
+        if pt:
+            try:
+                return datetime.fromtimestamp(calendar.timegm(pt), tz=timezone.utc)
+            except Exception:
+                pass
+        # fallback: try parsing the raw string
+        raw = entry.get("published", "")
+        for fmt in ("%a, %d %b %Y %H:%M:%S %z", "%Y-%m-%dT%H:%M:%S%z",
+                    "%Y-%m-%dT%H:%M:%SZ"):
+            try:
+                return datetime.strptime(raw, fmt).astimezone(timezone.utc)
+            except Exception:
+                pass
+        return None
+
     def _poll_all_feeds(self):
+        now_utc   = datetime.now(tz=timezone.utc)
+        max_age   = timedelta(minutes=MAX_ARTICLE_AGE_MIN)
         new_count = 0
+        stale_skipped = 0
+
         for source_name, url in RSS_FEEDS:
             try:
-                # Fetch via requests to bypass SSL issues on macOS, then parse content
                 try:
                     resp = _requests.get(url, headers=_HTTP_HEADERS, timeout=_HTTP_TIMEOUT, verify=False)
                     feed = feedparser.parse(resp.text)
                 except Exception:
-                    feed = feedparser.parse(url)   # fallback to direct parse
-                for entry in feed.entries[:10]:   # max 10 newest per feed
+                    feed = feedparser.parse(url)
+
+                for entry in feed.entries[:10]:
                     uid = hashlib.md5((entry.get("link", entry.get("title", "")) or "").encode()).hexdigest()
                     if uid in self._seen_uids:
                         continue
                     self._seen_uids.add(uid)
 
+                    # ── Staleness check ──────────────────────────────────────
+                    pub_dt = self._parse_pub_dt(entry)
+                    if pub_dt:
+                        age = now_utc - pub_dt
+                        if age > max_age:
+                            stale_skipped += 1
+                            continue   # article too old — skip entirely, no signal
+                    # If pub_dt is unparseable we allow it through (can't determine age)
+
                     title   = entry.get("title",   "")
                     summary = entry.get("summary", "") or entry.get("description", "")
                     link    = entry.get("link",    "")
-                    pub     = entry.get("published", datetime.utcnow().isoformat())
+                    pub_str = entry.get("published", now_utc.isoformat())
 
                     score, sentiment = self._score(title + " " + summary)
                     symbols = self._extract_symbols(title + " " + summary)
@@ -253,7 +291,7 @@ class NewsEngine:
                         summary   = summary[:300],
                         source    = source_name,
                         url       = link,
-                        published = pub,
+                        published = pub_str,
                         score     = score,
                         sentiment = sentiment,
                         symbols   = symbols or [self._default_sym],
@@ -268,8 +306,8 @@ class NewsEngine:
             except Exception as e:
                 logger.warning("Feed error [%s]: %s", source_name, e)
 
-        if new_count:
-            logger.info("NewsEngine: fetched %d new articles", new_count)
+        if new_count or stale_skipped:
+            logger.info("NewsEngine: %d new articles, %d stale skipped", new_count, stale_skipped)
 
     def _score(self, text: str) -> tuple:
         """Score sentiment of text. Returns (score, label)."""
@@ -307,7 +345,22 @@ class NewsEngine:
 
     def _emit_signal(self, item: NewsItem):
         direction = "BUY" if item.score > 0 else "SELL"
+        now = time.time()
         for symbol in item.symbols:
+            # ── Per-symbol cooldown ──────────────────────────────────────────
+            # Prevents firing duplicate trades when several articles about the
+            # same coin hit within the same poll window (e.g. 3 BTC articles
+            # in the same batch would otherwise open 3 positions).
+            last = self._last_signal_ts.get(symbol, 0)
+            if now - last < SYMBOL_COOLDOWN_SEC:
+                remaining = int(SYMBOL_COOLDOWN_SEC - (now - last))
+                logger.info(
+                    "NEWS SIGNAL COOLDOWN: %s %s — %ds remaining",
+                    symbol, direction, remaining
+                )
+                continue
+            self._last_signal_ts[symbol] = now
+
             sig = NewsSignal(
                 symbol    = symbol,
                 direction = direction,

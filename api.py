@@ -410,12 +410,33 @@ def _news_auto_execute(sig):
 
         # ── Step 3: Stop-Loss — background monitor thread ────────────────────
         # Testnet blocks STOP_MARKET; we poll mark price and fire MARKET when hit.
-        # On mainnet this is a safety net — native stop orders are preferred.
+        # IMPORTANT: every exit path calls rm.record_trade_close() so the open-
+        # position counter decrements and the next signal can be accepted.
         def _sl_monitor():
             api_log.info(
                 f"NEWS AUTO-TRADE SL MONITOR: watching {sig.symbol} "
                 f"sl={sl_price:.2f} tp={tp_price:.2f}"
             )
+
+            def _exit(reason: str, exit_price: float):
+                """Cancel TP, fire exit MARKET, decrement risk counter."""
+                if tp_order_id:
+                    try:
+                        client.cancel_order(symbol=sig.symbol, orderId=tp_order_id)
+                    except Exception:
+                        pass
+                try:
+                    client.new_order(
+                        symbol=sig.symbol, side=exit_side,
+                        type="MARKET", quantity=qty, reduceOnly="true",
+                    )
+                except Exception as e:
+                    api_log.error(f"NEWS exit order failed ({reason}): {e}")
+                # Always decrement — even if the exit order itself fails the
+                # position is being closed, so the slot must free up.
+                rm.record_trade_close(pnl=0.0, equity=exit_price * qty)
+                api_log.info(f"NEWS AUTO-TRADE CLOSED ({reason}): {sig.symbol}")
+
             deadline = time.time() + 3600  # 1h max hold
             while time.time() < deadline:
                 try:
@@ -425,48 +446,30 @@ def _news_auto_execute(sig):
 
                     if sl_hit:
                         api_log.info(
-                            f"NEWS AUTO-TRADE SL HIT: mark={mark:.2f} sl={sl_price:.2f} "
-                            f"— cancelling TP and firing MARKET exit"
+                            f"NEWS AUTO-TRADE SL HIT: mark={mark:.2f} sl={sl_price:.2f}"
                         )
-                        # Cancel the resting TP limit order first
-                        if tp_order_id:
-                            try:
-                                client.cancel_order(symbol=sig.symbol, orderId=tp_order_id)
-                            except Exception:
-                                pass
-                        client.new_order(
-                            symbol=sig.symbol, side=exit_side,
-                            type="MARKET", quantity=qty, reduceOnly="true",
-                        )
+                        _exit("SL", mark)
                         return
 
                     if tp_hit:
-                        # TP limit already filled — monitor's job is done
                         api_log.info(
-                            f"NEWS AUTO-TRADE TP FILLED: mark={mark:.2f} >= tp={tp_price:.2f}"
+                            f"NEWS AUTO-TRADE TP HIT: mark={mark:.2f} tp={tp_price:.2f}"
                         )
+                        # TP LIMIT likely already filled; still decrement counter
+                        rm.record_trade_close(pnl=0.0, equity=mark * qty)
                         return
 
                 except Exception as e:
                     api_log.error(f"NEWS SL monitor error: {e}")
                 time.sleep(5)
 
-            # 1h timeout — exit at market to avoid holding stale news trades
-            api_log.warning(
-                f"NEWS AUTO-TRADE TIMEOUT: closing {sig.symbol} at market after 1h"
-            )
+            # 1h timeout
+            api_log.warning(f"NEWS AUTO-TRADE TIMEOUT: closing {sig.symbol} at market")
             try:
-                if tp_order_id:
-                    try:
-                        client.cancel_order(symbol=sig.symbol, orderId=tp_order_id)
-                    except Exception:
-                        pass
-                client.new_order(
-                    symbol=sig.symbol, side=exit_side,
-                    type="MARKET", quantity=qty, reduceOnly="true",
-                )
-            except Exception as e:
-                api_log.error(f"NEWS AUTO-TRADE timeout exit failed: {e}")
+                mark = float(client.mark_price(symbol=sig.symbol)["markPrice"])
+            except Exception:
+                mark = avg
+            _exit("TIMEOUT", mark)
 
         threading.Thread(target=_sl_monitor, daemon=True,
                          name=f"news-sl-{sig.symbol}").start()

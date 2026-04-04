@@ -11,6 +11,7 @@ Key rules (from the world's best bots):
 
 import logging
 import json
+import os
 from datetime import date, datetime
 from pathlib import Path
 from dataclasses import dataclass, asdict
@@ -18,12 +19,12 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# ─── Config defaults ─────────────────────────────────────────────────────────
-RISK_PER_TRADE_PCT   = 0.01   # 1 % of equity per trade
-MAX_DAILY_LOSS_PCT   = 0.03   # halt if today's loss > 3 %
-DRAWDOWN_HALT_PCT    = 0.10   # halt if equity drops 10 % from peak
-MAX_OPEN_POSITIONS   = 3
-MIN_RR_RATIO         = 1.5    # minimum risk-reward ratio to accept trade
+# ─── Config defaults (all overridable via .env) ───────────────────────────────
+RISK_PER_TRADE_PCT = float(os.getenv("RISK_PER_TRADE_PCT", "0.01"))   # 1% per trade
+MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "0.05"))   # halt at 5% daily loss
+DRAWDOWN_HALT_PCT  = float(os.getenv("DRAWDOWN_HALT_PCT",  "0.10"))   # halt at 10% drawdown
+MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS",   "10"))     # was 3 — now 10
+MIN_RR_RATIO       = float(os.getenv("MIN_RR_RATIO",       "1.5"))    # min risk:reward
 
 
 @dataclass
