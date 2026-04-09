@@ -357,5 +357,6 @@ Always test thoroughly on Binance Testnet (`USE_TESTNET=true`) before enabling l
 ---
 
 <div align="center">
-Built with FastAPI · Binance Futures Connector · pandas · asyncio
+Built with love by samarth and udai · 
+<!-- Binance Futures Connector · pandas · asyncio -->
 </div>
