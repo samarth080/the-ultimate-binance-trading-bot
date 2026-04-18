@@ -32,6 +32,21 @@ class MarketRegime(str, Enum):
     NEUTRAL  = "NEUTRAL"    # transition zone — use default params
 
 
+class Tier(str, Enum):
+    TIER_1 = "TIER_1"   # score ≥ 80, HTF confirmed, trending/neutral regime
+    TIER_2 = "TIER_2"   # score ≥ 65 (standard threshold)
+    TIER_3 = "TIER_3"   # score < 65 (below threshold — skipped or near-miss)
+
+
+def _classify_tier(score: float, htf_confirmed: bool, regime: str) -> Tier:
+    """Classify signal quality into TIER_1, TIER_2, or TIER_3."""
+    if score >= 80.0 and htf_confirmed and regime in ("TRENDING", "NEUTRAL"):
+        return Tier.TIER_1
+    if score >= 65.0:
+        return Tier.TIER_2
+    return Tier.TIER_3
+
+
 def detect_regime(adx: float, chop: float, plus_di: float, minus_di: float) -> MarketRegime:
     di_spread = abs(plus_di - minus_di)
     if adx > 25 and chop < 61.8 and di_spread > 5:
@@ -71,6 +86,7 @@ class Signal:
     regime: MarketRegime       = field(default_factory=lambda: MarketRegime.NEUTRAL)
     trailing: bool             = False   # replace fixed TP with trailing ATR stop
     size_factor: float         = 1.0     # position size multiplier (0.5 in VOLATILE)
+    tier: str                  = "TIER_2"  # signal quality tier (TIER_1/2/3)
 
 
 # ─── Indicator Calculations ───────────────────────────────────────────────────
@@ -515,6 +531,8 @@ class SignalEngine:
         self._funding = get_funding_rate_fn
         self.params   = params or StrategyParams()
         
+        self._intel = None
+
         try:
             from src.ml.predictor import MLPredictor
             self.ml_predictor = MLPredictor()
@@ -528,6 +546,18 @@ class SignalEngine:
         except Exception as e:
             logger.error(f"[{symbol}/{interval}] Fetch error: {e}")
             return None
+
+    def attach_intelligence(self, intel) -> None:
+        """Attach an IntelligenceEngine for SOUL gate and near-miss recording."""
+        self._intel = intel
+
+    def _soul_blocks(self, soul: dict, tier: str, regime: str) -> bool:
+        """Return True if the SOUL configuration blocks this signal."""
+        if soul.get("skip_volatile_tier2") and regime == "VOLATILE" and tier == "TIER_2":
+            return True
+        if regime in soul.get("skip_regimes", []):
+            return True
+        return False
 
     def analyse(self, symbol: str, primary_tf: str = "5m",
                 confirm_tf: str = "1h") -> Optional[Signal]:
@@ -642,9 +672,36 @@ class SignalEngine:
             + (f" → {size_factor:.0%} size" if size_factor < 1.0 else "")
         )
 
-        if score < self.CONFIDENCE_THRESHOLD:
+        # ── Tier classification + SOUL gate ──────────────────────────────────
+        # HTF confirmed when both Supertrend and EMA alignment agree
+        htf_confirmed = (
+            (htf_bias == SignalDirection.LONG and ind_c["ema_50"] > ind_c["ema_200"])
+            or (htf_bias == SignalDirection.SHORT and ind_c["ema_50"] < ind_c["ema_200"])
+        )
+
+        tier = _classify_tier(score, htf_confirmed, regime.value)
+
+        if tier == Tier.TIER_3:
             logger.info(f"[{symbol}] Score {score:.1f} below threshold {self.CONFIDENCE_THRESHOLD} — no signal")
+            if self._intel is not None:
+                from src.intelligence import NearMissRecord
+                from datetime import date
+                self._intel.record_near_miss(NearMissRecord(
+                    symbol=symbol,
+                    regime=regime.value,
+                    confidence=score,
+                    indicators=",".join(reasons),
+                    entry_price_at_skip=ind_p["price"],
+                    session_date=date.today().isoformat(),
+                ))
             return None
+
+        if self._intel is not None:
+            soul = self._intel.get_active_soul()
+            tier_str = tier.value
+            if self._soul_blocks(soul, tier_str, regime.value):
+                logger.info(f"[{symbol}] SOUL gate blocked {tier_str} signal in {regime.value}")
+                return None
 
         price = ind_p["price"]
         atr   = ind_p["atr"]
@@ -669,7 +726,8 @@ class SignalEngine:
             reasons     = reasons,
             regime      = regime,
             trailing    = use_trailing,
-            size_factor = size_factor,
+            size_factor = 1.0 if tier == Tier.TIER_1 else size_factor,
+            tier        = tier.value,
         )
 
         logger.info(
