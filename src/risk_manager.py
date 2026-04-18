@@ -104,7 +104,8 @@ class RiskManager:
     def compute_position_size(self, equity: float, entry_price: float,
                                stop_price: float, take_profit: float,
                                contract_size: float = 1.0,
-                               step_size: float = 0.001) -> Optional[PositionSize]:
+                               step_size: float = 0.001,
+                               kelly_usdt: float = None) -> Optional[PositionSize]:
         """
         Calculate the position size that risks exactly `risk_per_trade` of equity.
 
@@ -150,6 +151,19 @@ class RiskManager:
             self._state["halted"] = True
             self._save_state()
             return None
+
+        # Kelly override: if caller supplies a pre-computed USDT size, use it
+        if kelly_usdt is not None:
+            raw_qty = kelly_usdt / entry_price
+            if step_size > 0:
+                raw_qty = max(step_size, round(raw_qty / step_size) * step_size)
+            return PositionSize(
+                symbol        = "",
+                quantity      = round(raw_qty, 6),
+                risk_amount   = round(kelly_usdt, 4),
+                stop_distance = round(stop_distance, 6),
+                rr_ratio      = round(rr_ratio, 3),
+            )
 
         return PositionSize(
             symbol        = "",

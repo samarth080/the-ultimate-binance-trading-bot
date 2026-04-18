@@ -28,6 +28,7 @@ import logging
 import argparse
 import uuid
 from datetime import datetime
+from datetime import date as _date
 from pathlib import Path
 from typing import Dict, List, Optional, Literal
 
@@ -45,6 +46,7 @@ from signal_engine  import SignalEngine, Signal, SignalDirection
 from risk_manager   import RiskManager
 from trade_tracker  import TradeTracker
 from notifications  import TelegramNotifier
+from intelligence   import IntelligenceEngine, TradeRecord
 
 # ── logging ──────────────────────────────────────────────────────────────────
 log_dir = Path("logs")
@@ -264,6 +266,8 @@ class StrategyEngine:
             self.notifier  = TelegramNotifier()
             
         self.signals   = SignalEngine(_make_klines_fn(self.client), _make_funding_fn(self.client))
+        self._intel    = IntelligenceEngine()
+        self.signals.attach_intelligence(self._intel)
         self.positions: Dict[str, OpenPosition] = {}   # symbol → position
 
     # ── main loop ────────────────────────────────────────────────────────────
@@ -313,12 +317,23 @@ class StrategyEngine:
             return
 
         step_size = _get_step_size(self.client, sig.symbol)
+        _peak_equity = self.risk._state.get("peak_equity") or equity
+        _current_drawdown = (
+            (_peak_equity - equity) / _peak_equity if _peak_equity > 0 else 0.0
+        )
+        _kelly_usdt = self._intel.compute_kelly_size(
+            equity=equity,
+            confidence=sig.confidence,
+            regime=sig.regime.value if hasattr(sig.regime, "value") else str(sig.regime),
+            current_drawdown=_current_drawdown,
+        )
         size = self.risk.compute_position_size(
             equity       = equity,
             entry_price  = sig.price,
             stop_price   = sig.stop_loss,
             take_profit  = sig.take_profit,
             step_size    = step_size,
+            kelly_usdt   = _kelly_usdt,
         )
         if size is None:
             return
@@ -465,6 +480,24 @@ class StrategyEngine:
         pnl_pct = record.pnl_pct if record else 0.0
 
         self.risk.record_trade_close(pnl, equity)
+
+        try:
+            sig = pos.signal
+            self._intel.record_close(TradeRecord(
+                symbol           = symbol,
+                direction        = direction.value,
+                regime           = sig.regime.value if hasattr(sig.regime, "value") else str(sig.regime),
+                tier             = sig.tier if isinstance(sig.tier, str) else sig.tier.value,
+                confidence       = float(sig.confidence),
+                indicators_fired = ", ".join(sig.reasons) if sig.reasons else "",
+                entry_price      = float(pos.entry_fill),
+                exit_reason      = reason,
+                pnl              = pnl,
+                rr_actual        = abs(pnl / max(float(sig.indicators.get("risk_usdt", 1) if sig.indicators else 1), 0.01)),
+                session_date     = _date.today().isoformat(),
+            ))
+        except Exception as exc:
+            logger.warning(f"Failed to record trade to journal: {exc}")
 
         self.notifier.trade_closed(symbol, direction.value, pnl, pnl_pct)
 
