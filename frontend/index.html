@@ -1659,8 +1659,10 @@ function setAction(msg) { id('sb-action').textContent = msg; }
   var wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
   var wsUrl = wsProto + '://' + location.host + '/ws/log';
   var streamStatusEl = document.getElementById('stream-status');
+  var _streamWs = null;
   function connectStream() {
-    var ws = new WebSocket(wsUrl);
+    if (_streamWs && _streamWs.readyState < 2) return;  // already open/connecting
+    var ws = _streamWs = new WebSocket(wsUrl);
     ws.onopen = function() { if (streamStatusEl) { streamStatusEl.textContent = 'LIVE'; streamStatusEl.style.background = '#22c55e'; } };
     ws.onmessage = function(e) {
       try {

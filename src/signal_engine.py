@@ -690,7 +690,7 @@ class SignalEngine:
             logger.info(f"[{symbol}] {reason} — no signal")
             if self._intel is not None:
                 try:
-                    from src.intelligence import NearMissRecord
+                    from intelligence import NearMissRecord
                     from datetime import date
                     self._intel.record_near_miss(NearMissRecord(
                         symbol=symbol,

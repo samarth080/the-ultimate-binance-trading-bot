@@ -203,7 +203,7 @@ class NewsEngine:
         self._on_signal        = on_signal
         self._default_sym      = default_symbol
         self._auto_trade       = auto_trade
-        self._seen_uids        = set()
+        self._seen_uids        = deque(maxlen=10_000)  # bounded; avoids unbounded growth
         self._news_buf         = deque(maxlen=MAX_RECENT_NEWS)
         self._signals_buf      = deque(maxlen=50)
         self._running          = False
