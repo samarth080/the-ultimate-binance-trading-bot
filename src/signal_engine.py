@@ -682,18 +682,26 @@ class SignalEngine:
         tier = _classify_tier(score, htf_confirmed, regime.value)
 
         if tier == Tier.TIER_3:
-            logger.info(f"[{symbol}] Score {score:.1f} below threshold {self.CONFIDENCE_THRESHOLD} — no signal")
+            reason = (
+                f"Score {score:.1f} < {self.CONFIDENCE_THRESHOLD}"
+                if score < self.CONFIDENCE_THRESHOLD
+                else f"Score {score:.1f} insufficient for tier (htf_confirmed={htf_confirmed})"
+            )
+            logger.info(f"[{symbol}] {reason} — no signal")
             if self._intel is not None:
-                from src.intelligence import NearMissRecord
-                from datetime import date
-                self._intel.record_near_miss(NearMissRecord(
-                    symbol=symbol,
-                    regime=regime.value,
-                    confidence=score,
-                    indicators=",".join(reasons),
-                    entry_price_at_skip=ind_p["price"],
-                    session_date=date.today().isoformat(),
-                ))
+                try:
+                    from src.intelligence import NearMissRecord
+                    from datetime import date
+                    self._intel.record_near_miss(NearMissRecord(
+                        symbol=symbol,
+                        regime=regime.value,
+                        confidence=score,
+                        indicators=",".join(reasons),
+                        entry_price_at_skip=ind_p["price"],
+                        session_date=date.today().isoformat(),
+                    ))
+                except Exception as exc:
+                    logger.warning(f"[{symbol}] Failed to record near-miss: {exc}")
             return None
 
         if self._intel is not None:
