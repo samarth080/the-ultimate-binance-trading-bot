@@ -121,6 +121,9 @@ select.finput option { background:#0b0b0e; }
 #pnl-centre { flex:1; min-width:0; display:flex; flex-direction:column; }
 .centre-tabs { display:flex; border-bottom:1px solid var(--border); flex-shrink:0; background:var(--bg-panel); }
 .ctab { padding:9px 18px; font-size:9.5px; color:var(--text-dim); cursor:pointer; letter-spacing:1px; border-bottom:2px solid transparent; transition:all .15s; }
+.stream-filter-btn { padding:3px 10px; background:#1e293b; color:#94a3b8; border:1px solid #334155; border-radius:4px; cursor:pointer; font-size:10px; letter-spacing:1px; }
+.stream-filter-btn.active { background:#3b82f6; color:#fff; border-color:#3b82f6; }
+.panel { padding:16px; }
 .ctab:hover  { color:var(--text-hi); background:var(--bg-hover); }
 .ctab.active { color:var(--amber); border-bottom-color:var(--amber); background:var(--amber-dim); }
 .cview       { display:none; flex:1; overflow-y:auto; }
@@ -434,6 +437,10 @@ select.finput option { background:#0b0b0e; }
         <div class="ctab"        data-view="scanner">SCANNER</div>
         <div class="ctab"        data-view="stats">TRADE STATS</div>
         <div class="ctab"        data-view="news">NEWS</div>
+        <div class="ctab"        data-view="stream">LIVE STREAM</div>
+        <div class="ctab"        data-view="journal">JOURNAL</div>
+        <div class="ctab"        data-view="soul">SOUL</div>
+        <div class="ctab"        data-view="kelly">KELLY</div>
       </div>
       <!-- Per-view controls live here, toggled by JS -->
       <div id="ctrl-analytics" style="padding:0 12px;display:flex;align-items:center;gap:10px;">
@@ -532,6 +539,100 @@ select.finput option { background:#0b0b0e; }
     <div class="cview" id="view-stats">
       <div id="stats-body">
         <div class="loading-msg">CLICK REFRESH TO LOAD STATS<span class="cursor"></span></div>
+      </div>
+    </div>
+
+    <!-- LIVE STREAM VIEW -->
+    <div class="cview" id="view-stream">
+      <div class="panel">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+          <h2 style="margin:0;font-size:13px;letter-spacing:2px;color:var(--text-hi)">LIVE SIGNAL STREAM</h2>
+          <span id="stream-status" style="background:#22c55e;color:#000;padding:2px 8px;border-radius:4px;font-size:10px;letter-spacing:1px">LIVE</span>
+          <div style="margin-left:auto;display:flex;gap:6px">
+            <button class="stream-filter-btn active" data-filter="ALL">ALL</button>
+            <button class="stream-filter-btn" data-filter="INFO">INFO</button>
+            <button class="stream-filter-btn" data-filter="WARNING">WARN</button>
+            <button class="stream-filter-btn" data-filter="ERROR">ERROR</button>
+          </div>
+        </div>
+        <div id="stream-log" style="background:#0f172a;border-radius:6px;padding:12px;height:480px;overflow-y:auto;font-family:monospace;font-size:12px;color:#94a3b8"></div>
+      </div>
+    </div>
+
+    <!-- JOURNAL VIEW -->
+    <div class="cview" id="view-journal">
+      <div class="panel">
+        <h2 style="font-size:13px;letter-spacing:2px;color:var(--text-hi);margin-bottom:12px">TRADE JOURNAL</h2>
+        <div id="journal-stats" style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap"></div>
+        <div style="display:flex;gap:10px;margin-bottom:10px">
+          <select id="journal-regime-filter" style="background:var(--bg-raised);color:var(--text-hi);border:1px solid var(--border);padding:4px 8px;font-size:11px">
+            <option value="">All Regimes</option>
+            <option>TRENDING</option><option>RANGING</option>
+            <option>VOLATILE</option><option>NEUTRAL</option>
+          </select>
+          <select id="journal-outcome-filter" style="background:var(--bg-raised);color:var(--text-hi);border:1px solid var(--border);padding:4px 8px;font-size:11px">
+            <option value="">All Outcomes</option>
+            <option value="WIN">WIN</option>
+            <option value="LOSS">LOSS</option>
+          </select>
+        </div>
+        <div style="overflow-x:auto">
+          <table id="journal-table" style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead>
+              <tr style="color:#94a3b8;border-bottom:1px solid #334155;font-size:10px;letter-spacing:1px">
+                <th style="padding:6px;text-align:left">#</th>
+                <th>SYMBOL</th><th>DIR</th><th>REGIME</th><th>TIER</th>
+                <th>CONF</th><th>EXIT</th><th>PNL</th><th>LESSON</th>
+              </tr>
+            </thead>
+            <tbody id="journal-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- SOUL VIEW -->
+    <div class="cview" id="view-soul">
+      <div class="panel">
+        <h2 style="font-size:13px;letter-spacing:2px;color:var(--text-hi);margin-bottom:12px">SOUL / STRATEGY CONFIG</h2>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+          <div>
+            <h3 style="color:var(--amber);margin-bottom:10px;font-size:11px;letter-spacing:1px">TRADING SOUL (SOUL.md)</h3>
+            <textarea id="soul-editor" style="width:100%;height:420px;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:12px;font-family:monospace;font-size:12px;resize:vertical;box-sizing:border-box"></textarea>
+            <button id="soul-save-btn" style="margin-top:8px;padding:6px 18px;background:#3b82f6;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;letter-spacing:1px">SAVE CHANGES</button>
+            <span id="soul-save-status" style="margin-left:10px;font-size:11px;color:#94a3b8"></span>
+          </div>
+          <div>
+            <h3 style="color:var(--amber);margin-bottom:10px;font-size:11px;letter-spacing:1px">ACTIVE LESSONS (AUTO-DERIVED)</h3>
+            <div id="soul-lessons" style="background:#0f172a;border-radius:6px;padding:12px;min-height:200px;font-size:12px;color:#a78bfa;font-family:monospace;white-space:pre-wrap"></div>
+            <p style="color:#94a3b8;font-size:11px;margin-top:8px">Lessons extracted from trade history, applied as gates each cycle.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- KELLY VIEW -->
+    <div class="cview" id="view-kelly">
+      <div class="panel">
+        <h2 style="font-size:13px;letter-spacing:2px;color:var(--text-hi);margin-bottom:12px">KELLY CRITERION SIZING</h2>
+        <div id="kelly-status-badge" style="margin-bottom:16px"></div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px">
+          <div style="background:#1e293b;border-radius:8px;padding:16px;text-align:center">
+            <div id="kelly-f-star" style="font-size:22px;color:#22c55e;font-family:monospace">--</div>
+            <div style="font-size:10px;color:#94a3b8;margin-top:4px;letter-spacing:1px">KELLY f*</div>
+          </div>
+          <div style="background:#1e293b;border-radius:8px;padding:16px;text-align:center">
+            <div id="kelly-half" style="font-size:22px;color:#60a5fa;font-family:monospace">--</div>
+            <div style="font-size:10px;color:#94a3b8;margin-top:4px;letter-spacing:1px">HALF-KELLY</div>
+          </div>
+          <div style="background:#1e293b;border-radius:8px;padding:16px;text-align:center">
+            <div id="kelly-next-size" style="font-size:22px;color:var(--amber);font-family:monospace">--</div>
+            <div style="font-size:10px;color:#94a3b8;margin-top:4px;letter-spacing:1px">NEXT SIZE (USDT)</div>
+          </div>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <tbody id="kelly-stats-tbody"></tbody>
+        </table>
       </div>
     </div>
 
@@ -1515,6 +1616,201 @@ id('scan-run-btn').addEventListener('click', loadScanner);
 
 // ── Status bar helpers ────────────────────────────────────────────────────────
 function setAction(msg) { id('sb-action').textContent = msg; }
+
+// ── Stream Tab ────────────────────────────────────────────────────────────────
+(function() {
+  var logEl = document.getElementById('stream-log');
+  var activeFilter = 'ALL';
+  var paused = false;
+  if (!logEl) return;
+
+  logEl.addEventListener('mouseenter', function() { paused = true; });
+  logEl.addEventListener('mouseleave', function() { paused = false; });
+
+  document.querySelectorAll('.stream-filter-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('.stream-filter-btn').forEach(function(b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      activeFilter = btn.dataset.filter;
+      filterStreamLog();
+    });
+  });
+
+  function filterStreamLog() {
+    document.querySelectorAll('#stream-log .stream-line').forEach(function(el) {
+      el.style.display = (activeFilter === 'ALL' || el.dataset.type === activeFilter) ? '' : 'none';
+    });
+  }
+
+  function appendStreamLine(type, msg, ts) {
+    var colors = { INFO:'#94a3b8', WARNING:'#f59e0b', ERROR:'#f87171', CRITICAL:'#f87171' };
+    var line = document.createElement('div');
+    line.className = 'stream-line';
+    line.dataset.type = type;
+    line.style.cssText = 'margin-bottom:2px;padding:1px 0;';
+    line.style.color = colors[type] || '#94a3b8';
+    line.textContent = (ts ? ts + ' ' : '') + '[' + type + '] ' + msg;
+    logEl.appendChild(line);
+    filterStreamLog();
+    if (!paused) logEl.scrollTop = logEl.scrollHeight;
+    while (logEl.children.length > 500) logEl.removeChild(logEl.firstChild);
+  }
+
+  var wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+  var wsUrl = wsProto + '://' + location.host + '/ws/log';
+  var streamStatusEl = document.getElementById('stream-status');
+  function connectStream() {
+    var ws = new WebSocket(wsUrl);
+    ws.onopen = function() { if (streamStatusEl) { streamStatusEl.textContent = 'LIVE'; streamStatusEl.style.background = '#22c55e'; } };
+    ws.onmessage = function(e) {
+      try {
+        var data = JSON.parse(e.data);
+        if (data.type === 'ping') return;
+        appendStreamLine(data.type || 'INFO', data.msg || e.data, data.ts || '');
+      } catch(_) {
+        appendStreamLine('INFO', e.data, new Date().toISOString().substring(11,19));
+      }
+    };
+    ws.onclose = function() {
+      if (streamStatusEl) { streamStatusEl.textContent = 'RECONNECTING'; streamStatusEl.style.background = '#f59e0b'; }
+      setTimeout(connectStream, 3000);
+    };
+  }
+  connectStream();
+})();
+
+// ── Journal Tab ───────────────────────────────────────────────────────────────
+(function() {
+  var tbody = document.getElementById('journal-tbody');
+  var statsEl = document.getElementById('journal-stats');
+  if (!tbody) return;
+
+  function loadJournal() {
+    fetch('/api/journal?limit=100')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var s = data.stats || {};
+        statsEl.innerHTML = [
+          ['WIN RATE', esc((s.win_rate || 0) + '%'), '#22c55e'],
+          ['AVG R:R',  esc(String(s.avg_rr || '--')), '#60a5fa'],
+          ['TRADES',   esc(String(s.trade_count || 0)), '#a78bfa'],
+          ['TOTAL PNL', esc('$' + (s.total_pnl || 0)), (s.total_pnl || 0) >= 0 ? '#22c55e' : '#f87171'],
+          ['KELLY', data.kelly_active ? 'ACTIVE' : 'WARMING', data.kelly_active ? '#22c55e' : '#f59e0b'],
+        ].map(function(item) {
+          return '<div style="background:#1e293b;border-radius:6px;padding:8px 14px"><div style="color:' + item[2] + ';font-size:15px;font-family:monospace">' + item[1] + '</div><div style="color:#94a3b8;font-size:10px;letter-spacing:1px">' + item[0] + '</div></div>';
+        }).join('');
+
+        var regimeFilter  = (document.getElementById('journal-regime-filter')  || {}).value || '';
+        var outcomeFilter = (document.getElementById('journal-outcome-filter') || {}).value || '';
+        var rows = (data.rows || []).filter(function(r) {
+          if (regimeFilter  && r.regime !== regimeFilter) return false;
+          if (outcomeFilter === 'WIN'  && r.pnl <= 0) return false;
+          if (outcomeFilter === 'LOSS' && r.pnl >  0) return false;
+          return true;
+        });
+        tbody.innerHTML = rows.map(function(r) {
+          var pnlColor = r.pnl >= 0 ? '#22c55e' : '#f87171';
+          var pnlStr = (r.pnl >= 0 ? '+' : '') + '$' + parseFloat(r.pnl).toFixed(2);
+          return '<tr style="border-bottom:1px solid #1e293b">' +
+            '<td style="padding:6px;color:#94a3b8">'  + esc(String(r.id))        + '</td>' +
+            '<td style="padding:6px">'                + esc(r.symbol)            + '</td>' +
+            '<td style="padding:6px;color:' + (r.direction==='LONG'?'#22c55e':'#f87171') + '">' + esc(r.direction) + '</td>' +
+            '<td style="padding:6px">'                + esc(r.regime)            + '</td>' +
+            '<td style="padding:6px;color:#a78bfa">'  + esc(r.tier)              + '</td>' +
+            '<td style="padding:6px">'                + esc(String(r.confidence)) + '</td>' +
+            '<td style="padding:6px">'                + esc(r.exit_reason)       + '</td>' +
+            '<td style="padding:6px;color:' + pnlColor + '">' + esc(pnlStr)      + '</td>' +
+            '<td style="padding:6px;color:#a78bfa;font-size:10px">' + esc(r.lesson || '') + '</td>' +
+            '</tr>';
+        }).join('');
+      }).catch(function(e) { console.error('Journal load failed', e); });
+  }
+
+  var regSel = document.getElementById('journal-regime-filter');
+  var outSel = document.getElementById('journal-outcome-filter');
+  if (regSel) regSel.addEventListener('change', loadJournal);
+  if (outSel) outSel.addEventListener('change', loadJournal);
+  var journalTab = document.querySelector('.ctab[data-view="journal"]');
+  if (journalTab) journalTab.addEventListener('click', loadJournal);
+  loadJournal();
+})();
+
+// ── SOUL Tab ──────────────────────────────────────────────────────────────────
+(function() {
+  var editor     = document.getElementById('soul-editor');
+  var saveBtn    = document.getElementById('soul-save-btn');
+  var saveStatus = document.getElementById('soul-save-status');
+  var lessonsEl  = document.getElementById('soul-lessons');
+  if (!editor) return;
+
+  function loadSoul() {
+    fetch('/api/soul').then(function(r) { return r.json(); }).then(function(d) {
+      editor.value = d.text || '';
+    }).catch(function() {});
+    fetch('/api/kelly').then(function(r) { return r.json(); }).then(function(d) {
+      if (lessonsEl) lessonsEl.textContent = (d.active_lessons && d.active_lessons.length) ? d.active_lessons.join('\n') : 'No lessons yet.';
+    }).catch(function() { if (lessonsEl) lessonsEl.textContent = 'No lessons yet.'; });
+  }
+
+  if (saveBtn) saveBtn.addEventListener('click', function() {
+    fetch('/api/soul', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text: editor.value})
+    }).then(function(r) { return r.json(); }).then(function() {
+      saveStatus.textContent = 'Saved ✓';
+      setTimeout(function() { saveStatus.textContent = ''; }, 2000);
+    }).catch(function() { saveStatus.textContent = 'Save failed'; });
+  });
+
+  var soulTab = document.querySelector('.ctab[data-view="soul"]');
+  if (soulTab) soulTab.addEventListener('click', loadSoul);
+  loadSoul();
+})();
+
+// ── Kelly Tab ─────────────────────────────────────────────────────────────────
+(function() {
+  var fStarEl   = document.getElementById('kelly-f-star');
+  var halfEl    = document.getElementById('kelly-half');
+  var nextEl    = document.getElementById('kelly-next-size');
+  var badgeEl   = document.getElementById('kelly-status-badge');
+  var statsBody = document.getElementById('kelly-stats-tbody');
+  if (!fStarEl) return;
+
+  function loadKelly() {
+    fetch('/api/kelly').then(function(r) { return r.json(); }).then(function(d) {
+      badgeEl.textContent = '';
+      var badge = document.createElement('span');
+      badge.style.cssText = 'padding:4px 12px;border-radius:4px;font-size:11px;letter-spacing:1px;';
+      if (d.kelly_active) {
+        badge.style.background = '#22c55e'; badge.style.color = '#000';
+        badge.textContent = 'KELLY ACTIVE';
+      } else {
+        badge.style.background = '#f59e0b'; badge.style.color = '#000';
+        badge.textContent = 'WARMING UP (' + (d.trade_count || 0) + '/20 TRADES)';
+      }
+      badgeEl.appendChild(badge);
+
+      var equity   = d.equity || 10000;
+      var nextSize = d.next_size_usdt;
+      fStarEl.textContent = nextSize ? ((nextSize / equity * 200).toFixed(1) + '%') : '--';
+      halfEl.textContent  = nextSize ? ((nextSize / equity * 100).toFixed(1) + '%') : '--';
+      nextEl.textContent  = nextSize ? ('$' + parseFloat(nextSize).toFixed(0))      : '--';
+      statsBody.innerHTML = [
+        ['WIN RATE',  esc((d.win_rate || 0) + '%')],
+        ['AVG R:R',   esc(String(d.avg_rr || '--'))],
+        ['DRAWDOWN',  esc(((d.drawdown || 0) * 100).toFixed(1) + '%')],
+        ['DD SCALE',  d.drawdown >= 0.08 ? '0.25×' : d.drawdown >= 0.05 ? '0.5×' : '1.0×'],
+      ].map(function(row) {
+        return '<tr><td style="padding:6px;color:#94a3b8;font-size:10px;letter-spacing:1px">' + row[0] + '</td><td style="padding:6px;font-family:monospace">' + row[1] + '</td></tr>';
+      }).join('');
+    }).catch(function(e) { console.error('Kelly load failed', e); });
+  }
+
+  var kellyTab = document.querySelector('.ctab[data-view="kelly"]');
+  if (kellyTab) kellyTab.addEventListener('click', loadKelly);
+  loadKelly();
+})();
 </script>
 </body>
 </html>
