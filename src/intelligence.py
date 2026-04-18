@@ -1,9 +1,10 @@
 from __future__ import annotations
-import sqlite3, json
-from dataclasses import dataclass, field, asdict
+import sqlite3
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 SOUL_DEFAULT = """# Trading Soul
 
@@ -70,10 +71,18 @@ class IntelligenceEngine:
         self.kelly_active: bool = self._count_trades() >= 20
 
     # ------------------------------------------------------------------ DB
-    def _conn(self) -> sqlite3.Connection:
+    @contextmanager
+    def _conn(self):
         conn = sqlite3.connect(self._db_path)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _init_db(self) -> None:
         with self._conn() as c:
@@ -140,7 +149,7 @@ class IntelligenceEngine:
 
     # ------------------------------------------------------------------ Journal
     def record_close(self, trade: TradeRecord) -> None:
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._conn() as c:
             c.execute(
                 """INSERT INTO trades
@@ -156,7 +165,7 @@ class IntelligenceEngine:
         self._extract_lesson()
 
     def record_near_miss(self, rec: NearMissRecord) -> None:
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._conn() as c:
             c.execute(
                 """INSERT INTO near_misses
@@ -232,40 +241,28 @@ class IntelligenceEngine:
 
     # ------------------------------------------------------------------ Lesson extraction
     def _extract_lesson(self) -> None:
-        now = datetime.utcnow().isoformat()
-        for regime in ("TRENDING", "RANGING", "VOLATILE", "NEUTRAL"):
-            rows = self._db_fetchall(
-                "SELECT pnl, exit_reason FROM trades WHERE regime=? ORDER BY id DESC LIMIT 20",
-                (regime,),
-            )
-            if len(rows) < 5:
-                continue
-            wins     = sum(1 for r in rows if r["pnl"] > 0)
-            win_rate = wins / len(rows)
-            sl_exits = sum(1 for r in rows if r["exit_reason"] == "SL")
-            trail_wins = sum(
-                1 for r in rows if r["exit_reason"] == "TRAIL" and r["pnl"] > 0
-            )
-            trail_total = sum(1 for r in rows if r["exit_reason"] == "TRAIL")
-            with self._conn() as c:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._conn() as c:
+            for regime in ("TRENDING", "RANGING", "VOLATILE", "NEUTRAL"):
+                rows = [dict(r) for r in c.execute(
+                    "SELECT pnl, exit_reason FROM trades WHERE regime=? ORDER BY id DESC LIMIT 20",
+                    (regime,),
+                ).fetchall()]
+                if len(rows) < 5:
+                    continue
+                wins = sum(1 for r in rows if r["pnl"] > 0)
+                win_rate = wins / len(rows)
+                sl_exits = sum(1 for r in rows if r["exit_reason"] == "SL")
+                trail_wins = sum(1 for r in rows if r["exit_reason"] == "TRAIL" and r["pnl"] > 0)
+                trail_total = sum(1 for r in rows if r["exit_reason"] == "TRAIL")
                 if regime == "VOLATILE" and win_rate < 0.35:
                     self._upsert_lesson(c, regime, "Enforce TIER_1 only in VOLATILE", len(rows), now)
                 if sl_exits / len(rows) > 0.60:
-                    self._upsert_lesson(
-                        c, regime,
-                        f"Stop distance too tight in {regime} — raise atr_stop_multiplier",
-                        len(rows), now,
-                    )
-                if (
-                    regime == "TRENDING"
-                    and trail_total >= 3
-                    and trail_wins / trail_total > 0.65
-                ):
-                    self._upsert_lesson(
-                        c, regime,
-                        "Trail effective in TRENDING ADX>30 — lower confidence gate to 70",
-                        len(rows), now,
-                    )
+                    self._upsert_lesson(c, regime,
+                        f"Stop distance too tight in {regime} — raise atr_stop_multiplier", len(rows), now)
+                if regime == "TRENDING" and trail_total >= 3 and trail_wins / trail_total > 0.65:
+                    self._upsert_lesson(c, regime,
+                        "Trail effective in TRENDING ADX>30 — lower confidence gate to 70", len(rows), now)
 
     def _upsert_lesson(self, conn, regime: str, rule_text: str, basis: int, now: str) -> None:
         existing = conn.execute(
@@ -290,7 +287,7 @@ class IntelligenceEngine:
             return
         wins = sum(1 for r in resolved if r["outcome"] == "WIN")
         if wins / len(resolved) > 0.60:
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
             with self._conn() as c:
                 self._upsert_lesson(
                     c, "ALL",

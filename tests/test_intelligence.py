@@ -1,5 +1,5 @@
 # tests/test_intelligence.py
-import pytest, sqlite3, os, tempfile
+import pytest
 from pathlib import Path
 from src.intelligence import IntelligenceEngine, TradeRecord, NearMissRecord
 
@@ -41,12 +41,12 @@ def test_kelly_formula_happy_path(engine):
 
 def test_kelly_drawdown_multiplier(engine):
     for i in range(10):
-        engine.record_close(TradeRecord("BTC","LONG","TRENDING","TIER_1",75,"ST",50000,"TP",200,2.0,"2026-01-01"))
+        engine.record_close(TradeRecord("BTC","LONG","TRENDING","TIER_1",75,"ST",50000,"TP",200,1.05,"2026-01-01"))
     for i in range(10):
         engine.record_close(TradeRecord("BTC","LONG","TRENDING","TIER_1",75,"ST",50000,"SL",-100,1.0,"2026-01-01"))
     size_healthy = engine.compute_kelly_size(10000, 80, "TRENDING", 0.0)
     size_drawdown = engine.compute_kelly_size(10000, 80, "TRENDING", 0.09)
-    assert size_drawdown < size_healthy * 0.5  # 0.25x f at 9% drawdown
+    assert size_drawdown < size_healthy * 0.3  # verifies 0.25x multiplier is applied
 
 def test_near_miss_recorded(engine):
     engine.record_near_miss(NearMissRecord(
@@ -77,3 +77,9 @@ def test_journal_rows_and_stats(engine):
     assert len(rows) == 1
     stats = engine.get_journal_stats()
     assert stats["trade_count"] == 1
+
+def test_soul_skip_regime_parsed(engine, tmp_path):
+    soul = tmp_path / "SOUL.md"
+    soul.write_text("skip_regime: RANGING\n")
+    result = engine.get_active_soul()
+    assert "RANGING" in result["skip_regimes"]
