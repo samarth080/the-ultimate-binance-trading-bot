@@ -25,6 +25,37 @@ class SignalDirection(str, Enum):
     FLAT  = "FLAT"
 
 
+class MarketRegime(str, Enum):
+    TRENDING = "TRENDING"   # ADX > 25, CI < 61.8, clear DI spread — ride the trend
+    RANGING  = "RANGING"    # ADX < 20, CI > 61.8 — mean-revert with tight stops
+    VOLATILE = "VOLATILE"   # ADX > 25, CI > 61.8 — strong but directionless, half size
+    NEUTRAL  = "NEUTRAL"    # transition zone — use default params
+
+
+def detect_regime(adx: float, chop: float, plus_di: float, minus_di: float) -> MarketRegime:
+    di_spread = abs(plus_di - minus_di)
+    if adx > 25 and chop < 61.8 and di_spread > 5:
+        return MarketRegime.TRENDING
+    if adx > 25 and chop >= 61.8:
+        return MarketRegime.VOLATILE
+    if adx < 20 and chop >= 61.8:
+        return MarketRegime.RANGING
+    return MarketRegime.NEUTRAL
+
+
+@dataclass(frozen=True)
+class StrategyParams:
+    atr_stop_multiplier: float = 1.6
+    atr_tp_multiplier: float = 2.8
+    rsi_long_min: float = 30.0
+    rsi_long_max: float = 65.0
+    rsi_short_min: float = 35.0
+    rsi_short_max: float = 70.0
+    stoch_rsi_overbought: float = 75.0
+    stoch_rsi_oversold: float = 25.0
+    chop_threshold: float = 61.8
+
+
 @dataclass
 class Signal:
     direction: SignalDirection
@@ -37,6 +68,9 @@ class Signal:
     take_profit: float         # ATR-based TP (R:R ≥ 1.5)
     indicators: Dict[str, float] = field(default_factory=dict)
     reasons: List[str]         = field(default_factory=list)
+    regime: MarketRegime       = field(default_factory=lambda: MarketRegime.NEUTRAL)
+    trailing: bool             = False   # replace fixed TP with trailing ATR stop
+    size_factor: float         = 1.0     # position size multiplier (0.5 in VOLATILE)
 
 
 # ─── Indicator Calculations ───────────────────────────────────────────────────
@@ -76,7 +110,7 @@ def _adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
     down_move = -low.diff()
     plus_dm   = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
     minus_dm  = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
-    tr_smooth = _atr(df, period) * period
+    tr_smooth = _atr(df, period)   # EWM average ATR — same scale as EWM DM
     plus_di   = 100 * pd.Series(plus_dm, index=df.index).ewm(
         alpha=1/period, adjust=False).mean() / tr_smooth.replace(0, np.nan)
     minus_di  = 100 * pd.Series(minus_dm, index=df.index).ewm(
@@ -327,12 +361,15 @@ def analyse_timeframe(df: pd.DataFrame, symbol: str,
 
 # ─── Signal Scorer ────────────────────────────────────────────────────────────
 
-def _score_direction(ind: Dict, direction: SignalDirection) -> Tuple[float, List[str]]:
+def _score_direction(ind: Dict, direction: SignalDirection, params: StrategyParams = None) -> Tuple[float, List[str]]:
     """
     Score a trade direction based on indicator evidence.
     Returns (score 0–100, reasons list).
     Higher score = stronger confluence.
     """
+    if params is None:
+        params = StrategyParams()
+        
     score   = 0.0
     reasons = []
     is_long = direction == SignalDirection.LONG
@@ -374,12 +411,12 @@ def _score_direction(ind: Dict, direction: SignalDirection) -> Tuple[float, List
 
     # ── Stochastic RSI (weight 15) ───────────────────────────────────────────
     k, d = ind["stoch_k"], ind["stoch_d"]
-    if is_long and k < 25 and d < 25:
+    if is_long and k < params.stoch_rsi_oversold and d < params.stoch_rsi_oversold:
         score += 15
         reasons.append(f"Stoch RSI oversold ({k:.0f})")
     elif is_long and k > d and k < 55:
         score += 8
-    elif not is_long and k > 75 and d > 75:
+    elif not is_long and k > params.stoch_rsi_overbought and d > params.stoch_rsi_overbought:
         score += 15
         reasons.append(f"Stoch RSI overbought ({k:.0f})")
     elif not is_long and k < d and k > 45:
@@ -404,10 +441,10 @@ def _score_direction(ind: Dict, direction: SignalDirection) -> Tuple[float, List
 
     # ── RSI not extreme against direction (weight 5) ──────────────────────────
     rsi = ind["rsi"]
-    if is_long and 30 < rsi < 65:
+    if is_long and params.rsi_long_min < rsi < params.rsi_long_max:
         score += 5
         reasons.append(f"RSI in healthy long zone ({rsi:.0f})")
-    elif not is_long and 35 < rsi < 70:
+    elif not is_long and params.rsi_short_min < rsi < params.rsi_short_max:
         score += 5
         reasons.append(f"RSI in healthy short zone ({rsi:.0f})")
 
@@ -438,6 +475,20 @@ def _score_direction(ind: Dict, direction: SignalDirection) -> Tuple[float, List
         score += 8
         reasons.append(f"Candle pattern: {matched[0].replace('_',' ').title()}")
 
+    # ── Machine Learning Override (weight ±40) ────────────────────────────────
+    if "ml_up_prob" in ind:
+        ml_prob = ind["ml_up_prob"]
+        ml_offset = (ml_prob - 0.5) * 80.0
+        
+        if is_long:
+            score += ml_offset
+            if ml_offset > 10: reasons.append(f"ML Random Forest is BULLISH ({ml_prob*100:.1f}%)")
+            elif ml_offset < -10: reasons.append(f"ML Predictor contradicts LONG ({ml_prob*100:.1f}%)")
+        else:
+            score -= ml_offset
+            if ml_offset < -10: reasons.append(f"ML Random Forest is BEARISH ({(1-ml_prob)*100:.1f}%)")
+            elif ml_offset > 10: reasons.append(f"ML Predictor contradicts SHORT ({(1-ml_prob)*100:.1f}%)")
+
     return min(score, 100.0), reasons
 
 
@@ -451,13 +502,10 @@ class SignalEngine:
     """
 
     CONFIDENCE_THRESHOLD = 65.0    # minimum score to emit a signal
-    ATR_STOP_MULTIPLIER  = 1.6     # stop = entry ± 1.6 * ATR
-    ATR_TP_MULTIPLIER    = 2.8     # TP   = entry ± 2.8 * ATR  (R:R ≈ 1.75)
-    CHOP_THRESHOLD       = 61.8    # above this → choppy market, skip signal
     # HTF bias: relaxed — only Supertrend required (EMA alignment is bonus, not gate)
     HTF_STRICT           = False
 
-    def __init__(self, fetch_klines_fn, get_funding_rate_fn=None):
+    def __init__(self, fetch_klines_fn, get_funding_rate_fn=None, params: StrategyParams = None):
         """
         fetch_klines_fn(symbol, interval, limit) → pd.DataFrame with columns:
             Open, High, Low, Close, Volume  (numeric)
@@ -465,6 +513,14 @@ class SignalEngine:
         """
         self._fetch   = fetch_klines_fn
         self._funding = get_funding_rate_fn
+        self.params   = params or StrategyParams()
+        
+        try:
+            from src.ml.predictor import MLPredictor
+            self.ml_predictor = MLPredictor()
+        except Exception as e:
+            logger.warning(f"ML configuration omitted: {e}")
+            self.ml_predictor = None
 
     def _get_df(self, symbol: str, interval: str, limit: int = 200) -> Optional[pd.DataFrame]:
         try:
@@ -490,13 +546,42 @@ class SignalEngine:
 
         if ind_p is None or ind_c is None:
             return None
+            
+        if getattr(self, "ml_predictor", None) and self.ml_predictor.enabled:
+            ind_p["ml_up_prob"] = self.ml_predictor.predict_up_probability(df_primary)
 
-        # ── Market regime filter (choppiness) ────────────────────────────────
-        # Skip signals when primary TF is in a choppy, ranging market
-        chop = ind_p.get("choppiness", 50.0)
-        if chop > self.CHOP_THRESHOLD:
+        # ── Regime detection + adaptive parameters ───────────────────────────
+        chop   = ind_p["choppiness"]
+        regime = detect_regime(ind_p["adx"], chop, ind_p["plus_di"], ind_p["minus_di"])
+
+        if regime == MarketRegime.TRENDING:
+            effective_chop = 70.0
+            stop_mult      = max(self.params.atr_stop_multiplier, 2.5)
+            tp_mult        = 8.0   # far-away circuit breaker — trailing stop handles the exit
+            use_trailing   = True
+            size_factor    = 1.0
+        elif regime == MarketRegime.VOLATILE:
+            effective_chop = 70.0
+            stop_mult      = max(self.params.atr_stop_multiplier, 2.0)
+            tp_mult        = max(self.params.atr_tp_multiplier, 3.0)
+            use_trailing   = False
+            size_factor    = 0.5
+        elif regime == MarketRegime.RANGING:
+            effective_chop = self.params.chop_threshold
+            stop_mult      = min(self.params.atr_stop_multiplier, 1.2)
+            tp_mult        = min(self.params.atr_tp_multiplier, 2.0)
+            use_trailing   = False
+            size_factor    = 0.75
+        else:  # NEUTRAL
+            effective_chop = self.params.chop_threshold
+            stop_mult      = self.params.atr_stop_multiplier
+            tp_mult        = self.params.atr_tp_multiplier
+            use_trailing   = False
+            size_factor    = 1.0
+
+        if chop > effective_chop:
             logger.info(
-                f"[{symbol}] Market choppy (CI={chop:.1f} > {self.CHOP_THRESHOLD}) — no signal"
+                f"[{symbol}] Market {regime.value} (CI={chop:.1f} > {effective_chop:.0f}) — no signal"
             )
             return None
 
@@ -535,8 +620,8 @@ class SignalEngine:
             except Exception as e:
                 logger.warning(f"[{symbol}] Could not fetch funding rate: {e}")
 
-        # ── Score primary TF in the direction of HTF bias ─────────────────────
-        score, reasons = _score_direction(ind_p, htf_bias)
+        # Calculate confidence score for the HTF direction using primary TF data
+        score, reasons = _score_direction(ind_p, htf_bias, self.params)
 
         # HTF EMA alignment adds to confidence (was previously a hard gate)
         if htf_bias == SignalDirection.LONG and ind_c["ema_50"] > ind_c["ema_200"]:
@@ -551,11 +636,11 @@ class SignalEngine:
         if funding_note:
             reasons.append(funding_note)
 
-        # Regime label in reasons
-        if chop < 38.2:
-            reasons.append(f"Strongly trending market (CI={chop:.1f})")
-        else:
-            reasons.append(f"Market regime OK (CI={chop:.1f})")
+        reasons.append(
+            f"Regime: {regime.value} (CI={chop:.1f}, ADX={ind_p['adx']:.1f})"
+            + (" → trailing exit" if use_trailing else "")
+            + (f" → {size_factor:.0%} size" if size_factor < 1.0 else "")
+        )
 
         if score < self.CONFIDENCE_THRESHOLD:
             logger.info(f"[{symbol}] Score {score:.1f} below threshold {self.CONFIDENCE_THRESHOLD} — no signal")
@@ -565,11 +650,11 @@ class SignalEngine:
         atr   = ind_p["atr"]
 
         if htf_bias == SignalDirection.LONG:
-            stop_loss   = price - self.ATR_STOP_MULTIPLIER * atr
-            take_profit = price + self.ATR_TP_MULTIPLIER  * atr
+            stop_loss   = price - stop_mult * atr
+            take_profit = price + tp_mult * atr
         else:
-            stop_loss   = price + self.ATR_STOP_MULTIPLIER * atr
-            take_profit = price - self.ATR_TP_MULTIPLIER  * atr
+            stop_loss   = price + stop_mult * atr
+            take_profit = price - tp_mult * atr
 
         sig = Signal(
             direction   = htf_bias,
@@ -582,6 +667,9 @@ class SignalEngine:
             take_profit = round(take_profit, 6),
             indicators  = ind_p,
             reasons     = reasons,
+            regime      = regime,
+            trailing    = use_trailing,
+            size_factor = size_factor,
         )
 
         logger.info(

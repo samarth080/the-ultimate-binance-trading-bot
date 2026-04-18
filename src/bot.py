@@ -469,6 +469,12 @@ Examples:
     parser.add_argument('args', nargs=argparse.REMAINDER, help='Order arguments')
     parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging')
     
+    # Strategy mode args
+    parser.add_argument('--mode', choices=['live', 'paper'], default='live', 
+                        help='Execution mode for strategy (default: live)')
+    parser.add_argument('--paper-capital', type=float, default=10000.0,
+                        help='Initial capital for paper trading (default: 10000)')
+    
     args = parser.parse_args()
     
     if args.verbose:
@@ -519,7 +525,14 @@ Examples:
         elif args.order_type == 'strategy':
             # Launch the autonomous strategy engine as a subprocess
             strategy_script = Path(__file__).parent / 'strategy_engine.py'
+            
+            # Extract strategy-specific arguments from bot args
             extra = list(args.args)
+            if '--mode' not in extra:
+                extra.extend(['--mode', args.mode])
+            if '--paper-capital' not in extra:
+                extra.extend(['--paper-capital', str(args.paper_capital)])
+                
             cmd = ['python', str(strategy_script)] + extra
             logger.info(f"Launching strategy engine: {' '.join(cmd)}")
             os.execv(sys.executable, [sys.executable] + cmd[1:] if cmd[0] == 'python' else cmd)

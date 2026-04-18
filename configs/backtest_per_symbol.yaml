@@ -1,0 +1,27 @@
+# Backtest Engine Configuration
+
+symbols:
+  - "BTCUSDT"
+  - "ETHUSDT"
+
+# Timeframes
+primary_timeframe: "5m"
+confirm_timeframe: "1h"
+
+# Date range (ISO 8601 UTC)
+start_date: "2024-03-01T00:00:00Z"
+end_date: "2024-03-07T00:00:00Z"
+
+# Account
+initial_capital: 10000.0
+
+# Execution assumptions
+taker_fee_bps: 4.0      # 0.04%
+slippage_bps: 2.0       # 0.02%
+fill_model: "pessimistic" # or "optimistic"
+
+# Mode: "portfolio" (shared capital) or "per_symbol" (isolated capital)
+mode: "per_symbol"
+
+# Reproducibility
+seed: 42

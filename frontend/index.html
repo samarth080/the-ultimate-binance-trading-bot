@@ -609,7 +609,9 @@ async function pollStatus() {
     id('net-dot').className = 'dot on';
     id('net-lbl').textContent = 'ONLINE';
     id('sb-api').textContent  = d.api_key_set ? 'API: OK' : 'API: NO KEY';
-    id('sb-mode').textContent = d.testnet ? 'MODE: TESTNET' : 'MODE: MAINNET';
+    let modeText = d.testnet ? 'TESTNET' : 'MAINNET';
+    if (d.mode === 'paper') modeText += ' [PAPER TRADING]';
+    id('sb-mode').textContent = 'MODE: ' + modeText;
     id('sb-ts').textContent   = new Date().toLocaleTimeString();
   } catch {
     id('net-dot').className = 'dot';
@@ -904,6 +906,24 @@ function renderAnalytics(d) {
         <div class="sig-card"><span class="sig-lbl">MACD</span><span class="sig-val ${sigClass(Si.macd)}">${Si.macd}</span></div>
         <div class="sig-card"><span class="sig-lbl">BOLL BAND</span><span class="sig-val ${sigClass(Si.bb)}">${Si.bb}</span></div>
         <div class="sig-card"><span class="sig-lbl">VOLUME</span><span class="sig-val ${sigClass(Si.volume)}">${Si.volume}</span></div>
+      </div>
+      <div class="sect-label" style="margin-top:16px;">MACHINE LEARNING: RANDOM FOREST</div>
+      <div class="assess" style="background:var(--bg-raised); border:1px solid var(--border); padding:14px; margin-bottom:16px;">
+        <div class="a-icon ${d.ml_action === 'BULLISH' ? 'bull' : (d.ml_action === 'BEARISH' ? 'bear' : 'neut')}">
+          ${d.ml_action === 'BULLISH' ? '▲' : (d.ml_action === 'BEARISH' ? '▼' : '◆')}
+        </div>
+        <div style="flex:1">
+          <div class="a-lbl ${d.ml_action === 'BULLISH' ? 'bull' : (d.ml_action === 'BEARISH' ? 'bear' : 'neut')}">
+             ${d.ml_action} PROBABILITY
+          </div>
+          <div class="a-sub" style="display:flex; justify-content:space-between; margin-bottom:6px;">
+             <span>Probability Score:</span>
+             <span style="font-weight:700; color:var(--text-hi)">${d.ml_probability}%</span>
+          </div>
+          <div class="bar-wrap" style="height:6px; background:var(--bg-hover); border-radius:3px;">
+             <div class="bar ${d.ml_probability > 50 ? 'g' : 'r'}" style="width:${d.ml_probability}%"></div>
+          </div>
+        </div>
       </div>
       <div class="assess">
         <div class="a-icon ${bias}">${biasIcon}</div>

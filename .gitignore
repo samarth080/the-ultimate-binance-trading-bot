@@ -16,3 +16,11 @@ ENV/
 # Logs
 logs/
 *.log
+
+# Backtesting outputs
+runs/*
+!runs/.gitkeep
+data/cache/*
+!data/cache/.gitkeep
+data/db/*
+!data/db/.gitkeep

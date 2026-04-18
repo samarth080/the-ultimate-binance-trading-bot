@@ -32,9 +32,10 @@ class TelegramNotifier:
 
     BASE_URL = "https://api.telegram.org/bot{token}/sendMessage"
 
-    def __init__(self, token: Optional[str] = None, chat_id: Optional[str] = None):
+    def __init__(self, token: Optional[str] = None, chat_id: Optional[str] = None, prefix: str = ""):
         self.token   = token   or os.getenv("TELEGRAM_BOT_TOKEN",  "")
         self.chat_id = chat_id or os.getenv("TELEGRAM_CHAT_ID",    "")
+        self.prefix  = prefix
         self.enabled = bool(self.token and self.chat_id and _REQUESTS_OK)
 
         if not self.enabled:
@@ -50,7 +51,7 @@ class TelegramNotifier:
             url  = self.BASE_URL.format(token=self.token)
             resp = requests.post(
                 url,
-                json={"chat_id": self.chat_id, "text": text,
+                json={"chat_id": self.chat_id, "text": self.prefix + text,
                       "parse_mode": parse_mode},
                 timeout=5,
             )

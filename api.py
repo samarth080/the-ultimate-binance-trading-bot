@@ -494,7 +494,13 @@ def _get_tracker():
     if _tracker is None:
         try:
             from trade_tracker import TradeTracker
-            _tracker = TradeTracker()
+            mode = os.getenv("BINANCE_MODE", "live").lower()
+            if mode == "paper":
+                _tracker = TradeTracker(db_path=Path("data/db/paper_trades.db"))
+                api_log.info("TradeTracker connected to PAPER mode DB")
+            else:
+                _tracker = TradeTracker()
+                api_log.info("TradeTracker connected to LIVE mode DB")
         except Exception as exc:
             api_log.warning(f"TradeTracker unavailable: {exc}")
     return _tracker
@@ -669,16 +675,17 @@ def _safe_limit(v: int, lo: int = 1, hi: int = 200) -> int:
 @app.get("/api/status")
 @limiter.limit(_RATE_READ)
 async def status(request: Request):
-    # Why: never expose even a partial key — the preview is not needed by the UI
-    # and any log scraper that captures responses would harvest it.
     api_key = os.getenv("BINANCE_API_KEY", "")
     secret  = os.getenv("BINANCE_SECRET_KEY", "")
     testnet = os.getenv("USE_TESTNET", "true").lower() == "true"
-    api_log.info(f"Status check — testnet={testnet} key_set={bool(api_key)}")
+    mode    = os.getenv("BINANCE_MODE", "live").lower()
+    
+    api_log.info(f"Status check — testnet={testnet} mode={mode}")
     return {
         "api_key_set":    bool(api_key),
         "secret_key_set": bool(secret),
         "testnet":        testnet,
+        "mode":           mode,
         "timestamp":      datetime.now().isoformat(),
     }
 
@@ -914,7 +921,20 @@ async def ml_analyze(request: Request, symbol: str = "BTCUSDT", interval: str = 
             for _, r in df.tail(30).iterrows()
         ]
 
-        api_log.info(f"ML {symbol}: ${current:,.2f} RSI={rsi:.1f} MACD={macd:+.2f}")
+        # New Machine Learning Predictor Hooks:
+        ml_prob = 0.5
+        ml_action = "NEUTRAL"
+        try:
+            from ml.predictor import MLPredictor
+            predictor = MLPredictor()
+            if predictor.enabled:
+                ml_prob = predictor.predict_up_probability(df)
+                if ml_prob > 0.65: ml_action = "BULLISH"
+                elif ml_prob < 0.35: ml_action = "BEARISH"
+        except Exception as e:
+            api_log.warning(f"ML Predictor fallback triggered inside /api/ml/analyze: {e}")
+
+        api_log.info(f"ML {symbol}: ${current:,.2f} RSI={rsi:.1f} PROB={ml_prob*100:.1f}%")
 
         return {
             "symbol":          symbol,
@@ -934,6 +954,8 @@ async def ml_analyze(request: Request, symbol: str = "BTCUSDT", interval: str = 
                 "bb":     "OVERBOUGHT" if current > bb_upper else ("OVERSOLD" if current < bb_lower else "NEUTRAL"),
                 "volume": "HIGH"       if vol_ratio > 1.5 else ("LOW" if vol_ratio < 0.5 else "NORMAL"),
             },
+            "ml_probability": round(ml_prob * 100, 2),
+            "ml_action": ml_action,
             "candles": candles,
             "ts": datetime.now().isoformat(),
         }

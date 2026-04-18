@@ -26,15 +26,17 @@ import sys
 import time
 import logging
 import argparse
+import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Literal
 
 import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
-sys.path.insert(0, str(Path(__file__).parent))
+# Ensure root is in Python path for absolute src.* imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from binance.um_futures import UMFutures
 from binance.error import ClientError
@@ -87,9 +89,23 @@ def _make_klines_fn(client: UMFutures):
 
 # ── order helpers ─────────────────────────────────────────────────────────────
 
-def _get_equity(client: UMFutures) -> float:
+def _get_equity(engine: "StrategyEngine") -> float:
+    if getattr(engine, "mode", "live") == "paper":
+        # Calculate paper equity
+        unrealized = 0.0
+        for sym, pos in engine.positions.items():
+            current_price = _get_current_price(engine.client, sym)
+            qty = pos.qty
+            if pos.signal.direction == SignalDirection.LONG:
+                unrealized += (current_price - pos.entry_fill) * qty
+            else:
+                unrealized += (pos.entry_fill - current_price) * qty
+        # Tracker holds closed PnL perfectly natively!
+        closed_pnl = engine.tracker.get_stats().get("total_pnl", 0.0)
+        return engine.paper_capital + closed_pnl + unrealized
+
     try:
-        info = client.account()
+        info = engine.client.account()
         for asset in info.get("assets", []):
             if asset.get("asset") == "USDT":
                 return float(asset.get("walletBalance", 0))
@@ -112,10 +128,18 @@ def _get_step_size(client: UMFutures, symbol: str) -> float:
     return 0.001
 
 
-def _place_market(client: UMFutures, symbol: str, side: str,
+def _place_market(engine: "StrategyEngine", symbol: str, side: str,
                   qty: float) -> Optional[Dict]:
+    if getattr(engine, "mode", "live") == "paper":
+        current_price = _get_current_price(engine.client, symbol)
+        # Apply 0.02% slippage
+        slip_pct = 0.0002
+        exec_price = current_price * (1 + slip_pct) if side == "BUY" else current_price * (1 - slip_pct)
+        # Assuming maker/taker handled in Tracker for PNL, we just return the fill average price
+        return {"orderId": str(uuid.uuid4().int)[0:9], "avgPrice": str(exec_price)}
+
     try:
-        resp = client.new_order(
+        resp = engine.client.new_order(
             symbol    = symbol,
             side      = side,
             type      = "MARKET",
@@ -128,11 +152,14 @@ def _place_market(client: UMFutures, symbol: str, side: str,
         return None
 
 
-def _place_stop_market(client: UMFutures, symbol: str, side: str,
+def _place_stop_market(engine: "StrategyEngine", symbol: str, side: str,
                        qty: float, stop_price: float) -> Optional[Dict]:
     """Place a STOP_MARKET order as the protective stop loss."""
+    if getattr(engine, "mode", "live") == "paper":
+        return {"orderId": str(uuid.uuid4().int)[0:9], "status": "NEW"}
+
     try:
-        resp = client.new_order(
+        resp = engine.client.new_order(
             symbol       = symbol,
             side         = side,
             type         = "STOP_MARKET",
@@ -147,17 +174,23 @@ def _place_stop_market(client: UMFutures, symbol: str, side: str,
         return None
 
 
-def _cancel_order(client: UMFutures, symbol: str, order_id: int):
+def _cancel_order(engine: "StrategyEngine", symbol: str, order_id: int):
+    if getattr(engine, "mode", "live") == "paper":
+        return
+        
     try:
-        client.cancel_order(symbol=symbol, orderId=order_id,
+        engine.client.cancel_order(symbol=symbol, orderId=order_id,
                             timestamp=int(datetime.now().timestamp() * 1000))
     except Exception as e:
         logger.warning(f"Could not cancel order {order_id}: {e}")
 
 
-def _get_order_status(client: UMFutures, symbol: str, order_id: int) -> Optional[str]:
+def _get_order_status(engine: "StrategyEngine", symbol: str, order_id: int) -> Optional[str]:
+    if getattr(engine, "mode", "live") == "paper":
+        return "NEW"
+
     try:
-        resp = client.query_order(
+        resp = engine.client.query_order(
             symbol    = symbol,
             orderId   = order_id,
             timestamp = int(datetime.now().timestamp() * 1000),
@@ -203,16 +236,33 @@ class StrategyEngine:
     def __init__(self, symbols: List[str],
                  primary_tf: str = "5m",
                  confirm_tf: str = "1h",
-                 scan_interval: int = 60):
+                 scan_interval: int = 60,
+                 mode: Literal["live", "paper"] = "live",
+                 paper_capital: float = 10000.0):
         self.symbols       = [s.upper() for s in symbols]
         self.primary_tf    = primary_tf
         self.confirm_tf    = confirm_tf
         self.scan_interval = scan_interval
+        self.mode          = mode
+        self.paper_capital = paper_capital
 
         self.client    = _make_client()
-        self.tracker   = TradeTracker()
-        self.risk      = RiskManager()
-        self.notifier  = TelegramNotifier()
+        
+        if self.mode == "paper":
+            db_path = Path("data/db/paper_trades.db")
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            self.tracker = TradeTracker(db_path=db_path)
+            
+            class PaperRiskManager(RiskManager):
+                STATE_FILE = Path("logs/paper_risk_state.json")
+            self.risk = PaperRiskManager()
+            self.notifier = TelegramNotifier(prefix="[PAPER] ")
+            logger.info("Initializing in PAPER TRADING mode.")
+        else:
+            self.tracker   = TradeTracker()
+            self.risk      = RiskManager()
+            self.notifier  = TelegramNotifier()
+            
         self.signals   = SignalEngine(_make_klines_fn(self.client), _make_funding_fn(self.client))
         self.positions: Dict[str, OpenPosition] = {}   # symbol → position
 
@@ -238,7 +288,7 @@ class StrategyEngine:
             self.notifier.send_async("*Bot Stopped* (KeyboardInterrupt)")
 
     def _cycle(self):
-        equity = _get_equity(self.client)
+        equity = _get_equity(self)
         self.risk.update_equity(equity)
 
         # 1. Monitor existing positions
@@ -278,7 +328,7 @@ class StrategyEngine:
         stop_side  = "SELL" if sig.direction == SignalDirection.LONG  else "BUY"
 
         # Place entry
-        fill = _place_market(self.client, sig.symbol, entry_side, size.quantity)
+        fill = _place_market(self, sig.symbol, entry_side, size.quantity)
         if not fill:
             logger.error(f"Entry order failed for {sig.symbol}")
             return
@@ -303,7 +353,7 @@ class StrategyEngine:
 
         # Place protective stop
         sl_resp = _place_stop_market(
-            self.client, sig.symbol, stop_side, size.quantity, actual_sl)
+            self, sig.symbol, stop_side, size.quantity, actual_sl)
         sl_order_id = int(sl_resp["orderId"]) if sl_resp else -1
 
         # Record in trade tracker
@@ -364,10 +414,10 @@ class StrategyEngine:
         if new_stop != pos.current_stop:
             # Update the SL order if it improved
             if pos.sl_order_id > 0:
-                _cancel_order(self.client, symbol, pos.sl_order_id)
+                _cancel_order(self, symbol, pos.sl_order_id)
             exit_side  = "SELL" if direction == SignalDirection.LONG else "BUY"
             sl_resp    = _place_stop_market(
-                self.client, symbol, exit_side, pos.qty, new_stop)
+                self, symbol, exit_side, pos.qty, new_stop)
             if sl_resp:
                 pos.sl_order_id = int(sl_resp["orderId"])
                 pos.current_stop = new_stop
@@ -389,7 +439,7 @@ class StrategyEngine:
 
         # Also check if SL order was filled externally
         elif pos.sl_order_id > 0:
-            status = _get_order_status(self.client, symbol, pos.sl_order_id)
+            status = _get_order_status(self, symbol, pos.sl_order_id)
             if status == "FILLED":
                 self._close_position(symbol, pos.current_stop, "SL", equity)
 
@@ -404,10 +454,10 @@ class StrategyEngine:
 
         # Cancel any open SL order
         if pos.sl_order_id > 0:
-            _cancel_order(self.client, symbol, pos.sl_order_id)
+            _cancel_order(self, symbol, pos.sl_order_id)
 
         # Place closing market order
-        _place_market(self.client, symbol, exit_side, pos.qty)
+        _place_market(self, symbol, exit_side, pos.qty)
 
         # Record close
         record = self.tracker.close_trade(pos.trade_id, exit_price, reason)
@@ -461,6 +511,10 @@ Examples:
                         help="Confirmation (trend) timeframe (default: 1h)")
     parser.add_argument("--scan",     type=int, default=60,
                         help="Scan interval in seconds (default: 60)")
+    parser.add_argument("--mode",     choices=["live", "paper"], default="live",
+                        help="Execution mode (default: live)")
+    parser.add_argument("--paper-capital", type=float, default=10000.0,
+                        help="Fake internal capital for paper mode (default: 10000)")
     parser.add_argument("--stats",    action="store_true",
                         help="Print stats and exit without trading")
 
@@ -471,6 +525,8 @@ Examples:
         primary_tf    = args.primary,
         confirm_tf    = args.confirm,
         scan_interval = args.scan,
+        mode          = args.mode,
+        paper_capital = args.paper_capital,
     )
 
     if args.stats:
