@@ -287,6 +287,22 @@ _limit_bot  = None
 # ── Trade Tracker singleton ───────────────────────────────────────────────────
 _tracker = None
 
+# ── IntelligenceEngine singleton ─────────────────────────────────────────────
+_intel_engine = None
+
+def _get_intel():
+    global _intel_engine
+    if _intel_engine is None:
+        try:
+            from intelligence import IntelligenceEngine
+            _intel_engine = IntelligenceEngine()
+            api_log.info("IntelligenceEngine ready")
+        except Exception as exc:
+            api_log.warning(f"IntelligenceEngine unavailable: {exc}")
+            raise HTTPException(503, "IntelligenceEngine unavailable")
+    return _intel_engine
+
+
 # ── News engine singleton ─────────────────────────────────────────────────────
 _news_engine = None
 
@@ -1364,6 +1380,75 @@ async def scan_multi_signal(request: Request,
         raise HTTPException(500, "Multi-scan failed — see server logs")
 
 
+@app.get("/api/journal")
+@limiter.limit(_RATE_READ)
+async def get_journal(request: Request, limit: int = 100):
+    limit = _safe_limit(limit, 1, 500)
+    try:
+        from intelligence import IntelligenceEngine
+        intel = _get_intel()
+        return {
+            "stats":        intel.get_journal_stats(),
+            "rows":         intel.get_journal_rows(limit=limit),
+            "kelly_active": intel.kelly_active,
+        }
+    except Exception as exc:
+        api_log.error(f"Journal fetch failed: {exc}")
+        raise HTTPException(500, "Journal unavailable — see server logs")
+
+
+@app.get("/api/soul")
+@limiter.limit(_RATE_READ)
+async def get_soul(request: Request):
+    try:
+        return {"text": _get_intel().read_soul()}
+    except Exception as exc:
+        api_log.error(f"SOUL read failed: {exc}")
+        raise HTTPException(500, "SOUL unavailable — see server logs")
+
+
+@app.post("/api/soul")
+@limiter.limit(_RATE_TRADE)
+async def update_soul(request: Request, payload: dict):
+    await _require_auth(request)
+    text = payload.get("text", "")
+    if not text.strip():
+        raise HTTPException(400, "Empty SOUL text rejected")
+    try:
+        _get_intel().update_soul(text)
+        api_log.info("SOUL.md updated via API")
+        return {"ok": True}
+    except Exception as exc:
+        api_log.error(f"SOUL update failed: {exc}")
+        raise HTTPException(500, "SOUL update failed — see server logs")
+
+
+@app.get("/api/kelly")
+@limiter.limit(_RATE_READ)
+async def get_kelly(request: Request):
+    try:
+        intel  = _get_intel()
+        stats  = intel.get_journal_stats()
+        from risk_manager import RiskManager
+        rm_state  = RiskManager()._state
+        equity    = float(rm_state.get("peak_equity") or 10000.0)
+        peak      = float(rm_state.get("peak_equity") or equity)
+        drawdown  = (peak - equity) / peak if peak > 0 else 0.0
+        next_size = intel.compute_kelly_size(equity, 80, "TRENDING", drawdown)
+        return {
+            "kelly_active":   intel.kelly_active,
+            "trade_count":    stats["trade_count"],
+            "win_rate":       stats["win_rate"],
+            "avg_rr":         stats["avg_rr"],
+            "next_size_usdt": next_size,
+            "equity":         equity,
+            "drawdown":       round(drawdown, 4),
+        }
+    except Exception as exc:
+        api_log.error(f"Kelly fetch failed: {exc}")
+        raise HTTPException(500, "Kelly unavailable — see server logs")
+
+
 @app.get("/api/positions/live")
 @limiter.limit(_RATE_READ)
 async def live_binance_positions(request: Request):
@@ -1427,6 +1512,36 @@ async def ws_endpoint(ws: WebSocket):
         if ws in _active_ws:
             _active_ws.remove(ws)
         api_log.info("WebSocket client disconnected")
+
+
+# ── WebSocket /ws/log — structured stream for STREAM tab ─────────────────────
+@app.websocket("/ws/log")
+async def ws_log_endpoint(ws: WebSocket):
+    """Same as /ws but sends structured {type, msg, ts} events for the STREAM tab."""
+    await ws.accept()
+    _active_ws.append(ws)
+    api_log.info("WS/log client connected")
+
+    last_sent = len(log_buffer)
+    try:
+        while True:
+            await asyncio.sleep(1)
+            current_len = len(log_buffer)
+            if current_len > last_sent:
+                new_entries = list(log_buffer)[last_sent:current_len]
+                for entry in new_entries:
+                    await ws.send_json({
+                        "type": entry.get("level", "INFO"),
+                        "msg":  entry.get("msg", ""),
+                        "ts":   entry.get("ts", ""),
+                    })
+                last_sent = current_len
+            else:
+                await ws.send_json({"type": "ping", "msg": "", "ts": ""})
+    except (WebSocketDisconnect, Exception):
+        if ws in _active_ws:
+            _active_ws.remove(ws)
+        api_log.info("WS/log client disconnected")
 
 
 # ── Serve frontend ─────────────────────────────────────────────────────────────
