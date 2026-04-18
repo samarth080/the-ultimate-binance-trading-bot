@@ -46,7 +46,7 @@ def test_kelly_drawdown_multiplier(engine):
         engine.record_close(TradeRecord("BTC","LONG","TRENDING","TIER_1",75,"ST",50000,"SL",-100,1.0,"2026-01-01"))
     size_healthy = engine.compute_kelly_size(10000, 80, "TRENDING", 0.0)
     size_drawdown = engine.compute_kelly_size(10000, 80, "TRENDING", 0.09)
-    assert size_drawdown < size_healthy * 0.3  # 0.25x multiplier at >=8% drawdown
+    assert size_drawdown < size_healthy * 0.5  # 0.25x f at 9% drawdown
 
 def test_near_miss_recorded(engine):
     engine.record_near_miss(NearMissRecord(

@@ -1,0 +1,71 @@
+<h2>New Tabs — What to add?</h2>
+<p class="subtitle">Current tabs: ML Analytics · Signal Engine · Scanner · Trade Stats · News. Which new tabs do you want? Select all that apply.</p>
+
+<div class="options" data-multiselect>
+
+  <div class="option" data-choice="stream" onclick="toggleSelect(this)">
+    <div class="letter">1</div>
+    <div class="content">
+      <h3>Live Signal Stream</h3>
+      <p>Real-time feed showing the bot's reasoning step-by-step: indicator values checked, regime classified, confidence score built up, entry decision made or skipped — and why. Like watching the bot think.</p>
+      <div style="background:#0f172a;border-radius:4px;padding:8px;margin-top:8px;font-size:11px;font-family:monospace;color:#94a3b8">
+        <div style="color:#f59e0b">⏱ 14:32:01 — BTCUSDT 1h scan</div>
+        <div>→ Regime: TRENDING (ADX=32, CI=47, DI+=28 DI-=11)</div>
+        <div style="color:#22c55e">→ Supertrend: BULLISH +25pts</div>
+        <div style="color:#22c55e">→ StochRSI: K crossed D from oversold +15pts</div>
+        <div style="color:#22c55e">→ MACD histogram positive +15pts</div>
+        <div style="color:#60a5fa">→ Confidence: 78/100 ✓ threshold met</div>
+        <div style="color:#22c55e;font-weight:bold">✅ LONG signal emitted — entry 68,420</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="journal" onclick="toggleSelect(this)">
+    <div class="letter">2</div>
+    <div class="content">
+      <h3>Trade Journal</h3>
+      <p>Every trade recorded with its full thesis: why it was entered, which indicators fired, market regime at entry, news sentiment at the time, and outcome. Lessons accumulate across sessions — bot reads the journal before trading.</p>
+      <div style="background:#0f172a;border-radius:4px;padding:8px;margin-top:8px;font-size:11px;font-family:monospace;color:#94a3b8">
+        <div style="color:#60a5fa">#42 · BTC LONG · 2024-01-15 · TRAIL exit +$142</div>
+        <div>Thesis: TRENDING regime, strong DI spread, StochRSI oversold</div>
+        <div>News: CoinDesk — "BTC holds 68k support" (neutral)</div>
+        <div style="color:#22c55e">Outcome: Won. Trail locked in +2.1% after 6h</div>
+        <div style="color:#a78bfa">Lesson: Trailing works well in ADX>30 markets</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="soul" onclick="toggleSelect(this)">
+    <div class="letter">3</div>
+    <div class="content">
+      <h3>SOUL / Strategy Config</h3>
+      <p>Editable trading principles panel: risk limits, anti-patterns the bot avoids, signal quality thresholds, regime overrides. Instead of editing .env or YAML files, configure the bot's "personality" from the UI.</p>
+      <div style="background:#0f172a;border-radius:4px;padding:8px;margin-top:8px;font-size:11px;font-family:monospace;color:#94a3b8">
+        <div style="color:#f59e0b">Risk Rules</div>
+        <div>Max risk/trade: 1% · Daily loss halt: 5% · Drawdown halt: 10%</div>
+        <div style="color:#f59e0b;margin-top:4px">Signal Quality Gates</div>
+        <div>Min confidence: 65 · Require HTF confirm: ON</div>
+        <div style="color:#f59e0b;margin-top:4px">Anti-patterns</div>
+        <div>Skip: crowded longs (funding > 0.05%) · Skip: VOLATILE regime</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="kelly" onclick="toggleSelect(this)">
+    <div class="letter">4</div>
+    <div class="content">
+      <h3>Kelly Sizing Calculator</h3>
+      <p>Live Kelly criterion panel: shows current estimated edge based on historical win rate + avg R:R, calculates optimal fractional Kelly bet size, shows how position size scales with confidence score.</p>
+      <div style="background:#0f172a;border-radius:4px;padding:8px;margin-top:8px;font-size:11px;font-family:monospace;color:#94a3b8">
+        <div style="color:#60a5fa">Historical stats (last 50 trades)</div>
+        <div>Win rate: 45.2% · Avg win: +2.8R · Avg loss: -1.0R</div>
+        <div style="color:#22c55e">Edge: 0.276 · Kelly f*: 18.4%</div>
+        <div>Half-Kelly: 9.2% of bankroll → $952 on $10,452 equity</div>
+        <div style="color:#a78bfa">With confidence 78/100 → size_factor 0.9 → $857</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<p class="subtitle" style="margin-top:16px">Select all you want, then confirm in the terminal.</p>

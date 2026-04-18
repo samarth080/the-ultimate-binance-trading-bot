@@ -1,0 +1,124 @@
+<h2>New Dashboard Tabs — Layout Preview</h2>
+<p class="subtitle">Four new tabs added to the existing tab bar. Click each card to see the layout.</p>
+
+<div class="cards">
+
+  <div class="card" data-choice="stream" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#0f172a;padding:10px;border-radius:6px;font-size:10px;color:#94a3b8;font-family:monospace;height:160px;overflow:hidden">
+        <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+          <span style="color:#e2e8f0;font-size:11px">▶ Live Signal Stream</span>
+          <span style="background:#22c55e;color:#000;padding:1px 6px;border-radius:3px;font-size:9px">LIVE</span>
+        </div>
+        <div style="background:#1e293b;border-radius:4px;padding:6px;height:125px;overflow:hidden">
+          <div style="color:#94a3b8;margin-bottom:2px">14:32:01 — scanning BTCUSDT 1h</div>
+          <div style="color:#a78bfa">→ Regime: TRENDING (ADX=32 CI=47)</div>
+          <div style="color:#22c55e">→ Supertrend BULLISH +25pts</div>
+          <div style="color:#22c55e">→ StochRSI crossed up from 18 +15pts</div>
+          <div style="color:#22c55e">→ MACD histogram positive +15pts</div>
+          <div style="color:#60a5fa">→ Score: 78/100 · Tier: TIER_1 ✓</div>
+          <div style="color:#22c55e;font-weight:bold">✅ LONG emitted · Kelly size: $857</div>
+          <div style="margin-top:4px;color:#94a3b8">14:32:04 — scanning ETHUSDT 1h</div>
+          <div style="color:#f59e0b">→ Regime: RANGING · SOUL gate: skip</div>
+          <div style="color:#f87171">⛔ Blocked by SOUL anti-pattern</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>Tab 1 — Live Signal Stream</h3>
+      <p>Scrolling log of every indicator check, regime classification, tier decision, SOUL gate, and final entry/skip. Auto-scrolls. Filter buttons: ALL · ENTRIES · SKIPS · ERRORS.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="journal" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#0f172a;padding:10px;border-radius:6px;font-size:10px;color:#94a3b8;font-family:monospace;height:160px;overflow:hidden">
+        <div style="color:#e2e8f0;font-size:11px;margin-bottom:6px">📓 Trade Journal</div>
+        <div style="display:flex;gap:6px;margin-bottom:6px">
+          <div style="background:#22c55e22;border:1px solid #22c55e44;border-radius:3px;padding:3px 8px;color:#22c55e;font-size:9px">Win rate 45%</div>
+          <div style="background:#60a5fa22;border:1px solid #60a5fa44;border-radius:3px;padding:3px 8px;color:#60a5fa;font-size:9px">Avg R:R 1.8</div>
+          <div style="background:#a78bfa22;border:1px solid #a78bfa44;border-radius:3px;padding:3px 8px;color:#a78bfa;font-size:9px">42 trades</div>
+        </div>
+        <div style="background:#1e293b;border-radius:4px;padding:5px;margin-bottom:4px">
+          <div style="display:flex;justify-content:space-between">
+            <span style="color:#22c55e">#42 BTC LONG TRAIL +$142</span>
+            <span style="color:#94a3b8">Jan 15</span>
+          </div>
+          <div>TRENDING · TIER_1 · 78/100</div>
+          <div style="color:#a78bfa;font-size:9px">Lesson: Trail effective when ADX>30</div>
+        </div>
+        <div style="background:#1e293b;border-radius:4px;padding:5px">
+          <div style="display:flex;justify-content:space-between">
+            <span style="color:#f87171">#41 ETH SHORT SL -$48</span>
+            <span style="color:#94a3b8">Jan 14</span>
+          </div>
+          <div>VOLATILE · TIER_2 · 67/100</div>
+          <div style="color:#f59e0b;font-size:9px">Lesson: VOLATILE+TIER_2 = avoid</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>Tab 2 — Trade Journal</h3>
+      <p>Table of every closed trade with regime, tier, confidence, exit reason, PnL, and auto-extracted lesson. Filterable by regime and outcome. Summary stats strip at top.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="soul" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#0f172a;padding:10px;border-radius:6px;font-size:10px;color:#94a3b8;font-family:monospace;height:160px;overflow:hidden">
+        <div style="color:#e2e8f0;font-size:11px;margin-bottom:6px">⚙️ SOUL / Strategy Config</div>
+        <div style="background:#1e293b;border-radius:4px;padding:6px;margin-bottom:4px">
+          <div style="color:#f59e0b;margin-bottom:3px">Risk Rules</div>
+          <div style="display:flex;justify-content:space-between"><span>Max risk/trade</span><span style="color:#60a5fa">1.0%</span></div>
+          <div style="display:flex;justify-content:space-between"><span>Daily loss halt</span><span style="color:#60a5fa">5.0%</span></div>
+          <div style="display:flex;justify-content:space-between"><span>Drawdown halt</span><span style="color:#60a5fa">10.0%</span></div>
+        </div>
+        <div style="background:#1e293b;border-radius:4px;padding:6px">
+          <div style="color:#f59e0b;margin-bottom:3px">Active Lessons (auto)</div>
+          <div style="color:#a78bfa;font-size:9px">• Skip VOLATILE+TIER_2 (68% SL rate)</div>
+          <div style="color:#a78bfa;font-size:9px">• Trail in TRENDING ≥ ADX 30 only</div>
+          <div style="color:#22c55e;font-size:9px">• Confidence min raised to 70 (journal)</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>Tab 3 — SOUL Config</h3>
+      <p>Two sections: editable Risk Rules (sliders/inputs backed by SOUL.md), and read-only Active Lessons auto-derived from the journal. Shows what the bot is currently "thinking" about itself.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="kelly" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#0f172a;padding:10px;border-radius:6px;font-size:10px;color:#94a3b8;font-family:monospace;height:160px;overflow:hidden">
+        <div style="color:#e2e8f0;font-size:11px;margin-bottom:6px">📐 Kelly Sizing</div>
+        <div style="display:flex;gap:6px;margin-bottom:6px">
+          <div style="flex:1;background:#1e293b;border-radius:3px;padding:5px;text-align:center">
+            <div style="color:#22c55e;font-size:13px">18.4%</div>
+            <div style="font-size:9px">Kelly f*</div>
+          </div>
+          <div style="flex:1;background:#1e293b;border-radius:3px;padding:5px;text-align:center">
+            <div style="color:#60a5fa;font-size:13px">9.2%</div>
+            <div style="font-size:9px">Half-Kelly</div>
+          </div>
+          <div style="flex:1;background:#1e293b;border-radius:3px;padding:5px;text-align:center">
+            <div style="color:#f59e0b;font-size:13px">$857</div>
+            <div style="font-size:9px">Next size</div>
+          </div>
+        </div>
+        <div style="background:#1e293b;border-radius:4px;padding:5px">
+          <div style="display:flex;justify-content:space-between;margin-bottom:2px"><span>Win rate (20 trades)</span><span style="color:#22c55e">45.2%</span></div>
+          <div style="display:flex;justify-content:space-between;margin-bottom:2px"><span>Avg win R</span><span style="color:#22c55e">2.8</span></div>
+          <div style="display:flex;justify-content:space-between;margin-bottom:2px"><span>Avg loss R</span><span style="color:#f87171">1.0</span></div>
+          <div style="display:flex;justify-content:space-between"><span>Drawdown scale</span><span style="color:#60a5fa">1.0× (healthy)</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>Tab 4 — Kelly Sizing</h3>
+      <p>Live Kelly calculator showing current edge estimate, f* and half-Kelly fractions, next trade size in USDT, and the inputs driving it (win rate, avg R, drawdown multiplier).</p>
+    </div>
+  </div>
+
+</div>
+
+<p class="subtitle" style="margin-top:16px">These are the 4 new tabs. Let me know in the terminal if anything needs adjusting.</p>

@@ -1,0 +1,137 @@
+<h2>Dashboard Layout — Which direction?</h2>
+<p class="subtitle">The new dashboard is the "face" of the bot. Pick the layout that best matches how you'd use it.</p>
+
+<div class="cards">
+
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#0f172a;padding:10px;border-radius:6px;font-size:11px;color:#94a3b8;font-family:monospace">
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <div style="flex:1;background:#1e293b;border-radius:4px;padding:6px;text-align:center">
+            <div style="color:#f59e0b;font-size:14px;font-weight:bold">$10,452</div>
+            <div style="font-size:9px">Equity</div>
+          </div>
+          <div style="flex:1;background:#1e293b;border-radius:4px;padding:6px;text-align:center">
+            <div style="color:#22c55e;font-size:14px;font-weight:bold">+$267</div>
+            <div style="font-size:9px">PnL</div>
+          </div>
+          <div style="flex:1;background:#1e293b;border-radius:4px;padding:6px;text-align:center">
+            <div style="color:#60a5fa;font-size:14px;font-weight:bold">45.2%</div>
+            <div style="font-size:9px">Win Rate</div>
+          </div>
+          <div style="flex:1;background:#1e293b;border-radius:4px;padding:6px;text-align:center">
+            <div style="color:#a78bfa;font-size:14px;font-weight:bold">TREND</div>
+            <div style="font-size:9px">Regime</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <div style="flex:2;background:#1e293b;border-radius:4px;padding:6px">
+            <div style="color:#e2e8f0;margin-bottom:4px;font-size:10px">▶ Live Signal Stream</div>
+            <div style="color:#22c55e;font-size:9px">✓ BTC 1h → LONG signal (78/100)</div>
+            <div style="color:#94a3b8;font-size:9px">→ ADX=31 CI=48 DI+>DI-</div>
+            <div style="color:#94a3b8;font-size:9px">→ StochRSI oversold crossover</div>
+            <div style="color:#f59e0b;font-size:9px">⚡ ETH 4h checking regime...</div>
+            <div style="color:#94a3b8;font-size:9px">→ RANGING — skip entry</div>
+          </div>
+          <div style="flex:1;background:#1e293b;border-radius:4px;padding:6px">
+            <div style="color:#e2e8f0;margin-bottom:4px;font-size:10px">Positions</div>
+            <div style="color:#22c55e;font-size:9px">BTC LONG</div>
+            <div style="color:#94a3b8;font-size:9px">+$142 trail</div>
+            <div style="color:#f87171;font-size:9px">ETH SHORT</div>
+            <div style="color:#94a3b8;font-size:9px">-$28 sl</div>
+          </div>
+        </div>
+        <div style="background:#1e293b;border-radius:4px;padding:6px;margin-top:6px">
+          <div style="color:#e2e8f0;margin-bottom:2px;font-size:10px">Market Scanner</div>
+          <div style="display:flex;gap:8px;font-size:9px">
+            <span style="color:#60a5fa">BTCUSDT</span><span style="color:#22c55e">TREND 78</span>
+            <span style="color:#60a5fa">ETHUSDT</span><span style="color:#f59e0b">RANGE 41</span>
+            <span style="color:#60a5fa">SOLUSDT</span><span style="color:#94a3b8">NEUT 55</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A — Command Center</h3>
+      <p>Top metrics strip → live signal reasoning stream (main focus) → positions sidebar → market scanner below. Everything on one screen. Real-time thinking visible at all times.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#0f172a;padding:10px;border-radius:6px;font-size:11px;color:#94a3b8;font-family:monospace">
+        <div style="display:flex;gap:6px;height:110px">
+          <div style="width:90px;background:#1e293b;border-radius:4px;padding:6px">
+            <div style="color:#e2e8f0;font-size:9px;font-weight:bold;margin-bottom:6px">NAV</div>
+            <div style="color:#60a5fa;font-size:9px;margin-bottom:3px">📊 Dashboard</div>
+            <div style="color:#94a3b8;font-size:9px;margin-bottom:3px">📡 Signals</div>
+            <div style="color:#94a3b8;font-size:9px;margin-bottom:3px">📰 News</div>
+            <div style="color:#94a3b8;font-size:9px;margin-bottom:3px">📈 Backtest</div>
+            <div style="color:#94a3b8;font-size:9px;margin-bottom:3px">⚙️ Config</div>
+          </div>
+          <div style="flex:1;background:#1e293b;border-radius:4px;padding:6px">
+            <div style="color:#e2e8f0;font-size:10px;margin-bottom:4px">Dashboard</div>
+            <div style="display:flex;gap:4px;margin-bottom:4px">
+              <div style="flex:1;background:#0f172a;border-radius:3px;padding:4px;text-align:center">
+                <div style="color:#22c55e;font-size:11px">+$267</div>
+                <div style="font-size:8px">PnL</div>
+              </div>
+              <div style="flex:1;background:#0f172a;border-radius:3px;padding:4px;text-align:center">
+                <div style="color:#a78bfa;font-size:11px">TREND</div>
+                <div style="font-size:8px">Regime</div>
+              </div>
+            </div>
+            <div style="background:#0f172a;border-radius:3px;padding:4px;font-size:9px">
+              <div style="color:#22c55e">BTC LONG entry 68,420 ↑ trail stop</div>
+              <div style="color:#94a3b8">ETH SHORT entry 3,180 ↓ sl at 3,220</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B — Multi-page App</h3>
+      <p>Sidebar nav with dedicated pages: Dashboard, Signals, News, Backtest, Config. More space per section, each page fully focused. Closer to a professional trading terminal.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#0f172a;padding:10px;border-radius:6px;font-size:11px;color:#94a3b8;font-family:monospace">
+        <div style="display:flex;gap:4px;margin-bottom:6px">
+          <div style="padding:3px 8px;background:#3b82f6;color:white;border-radius:3px;font-size:9px">Overview</div>
+          <div style="padding:3px 8px;background:#1e293b;border-radius:3px;font-size:9px">Signals</div>
+          <div style="padding:3px 8px;background:#1e293b;border-radius:3px;font-size:9px">Positions</div>
+          <div style="padding:3px 8px;background:#1e293b;border-radius:3px;font-size:9px">News</div>
+          <div style="padding:3px 8px;background:#1e293b;border-radius:3px;font-size:9px">Journal</div>
+        </div>
+        <div style="background:#1e293b;border-radius:4px;padding:6px">
+          <div style="display:flex;gap:8px;margin-bottom:4px">
+            <div style="color:#f59e0b">$10,452</div>
+            <div style="color:#22c55e">+$267 today</div>
+            <div style="color:#a78bfa">TRENDING market</div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:9px">
+            <div style="background:#0f172a;border-radius:3px;padding:4px">
+              <div style="color:#e2e8f0;margin-bottom:2px">Signal Reasoning</div>
+              <div style="color:#22c55e">BTC: LONG 78/100</div>
+              <div style="color:#94a3b8">Supertrend + ADX + StochRSI</div>
+            </div>
+            <div style="background:#0f172a;border-radius:3px;padding:4px">
+              <div style="color:#e2e8f0;margin-bottom:2px">Market Scanner</div>
+              <div style="color:#60a5fa">BTC ▲ TREND</div>
+              <div style="color:#f59e0b">ETH → RANGE</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C — Tabbed (keep current pattern)</h3>
+      <p>Extend the existing tab structure: Overview, Signals, Positions, News, Journal. Familiar, low migration cost, add new tabs for new features like the trade journal and live stream.</p>
+    </div>
+  </div>
+
+</div>
+
+<p class="subtitle" style="margin-top:16px">Click to select, then tell me in the terminal.</p>

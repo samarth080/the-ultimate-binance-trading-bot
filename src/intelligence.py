@@ -228,8 +228,7 @@ class IntelligenceEngine:
         elif current_drawdown >= 0.05:
             drawdown_mult = 0.5
         f *= drawdown_mult
-        hard_cap = equity * 0.05 * drawdown_mult
-        return min(equity * f, hard_cap)
+        return min(equity * f, equity * 0.05)
 
     # ------------------------------------------------------------------ Lesson extraction
     def _extract_lesson(self) -> None:
