@@ -210,7 +210,7 @@ class NewsEngine:
         self._on_signal        = on_signal
         self._default_sym      = default_symbol
         self._auto_trade       = auto_trade
-        self._seen_uids        = deque(maxlen=10_000)  # bounded; avoids unbounded growth
+        self._seen_uids: set   = set()   # O(1) lookup; trimmed at 10k entries
         self._news_buf         = deque(maxlen=MAX_RECENT_NEWS)
         self._signals_buf      = deque(maxlen=50)
         self._running          = False
@@ -248,7 +248,7 @@ class NewsEngine:
                     uid = hashlib.md5(
                         (entry.get("link", entry.get("title", "")) or "").encode()
                     ).hexdigest()
-                    self._seen_uids.add(uid)
+                    self._add_seen(uid)
 
                     # Still score and store so the NEWS tab shows content immediately
                     pub_dt  = self._parse_pub_dt(entry)
@@ -291,6 +291,32 @@ class NewsEngine:
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
+    def _add_seen(self, uid: str):
+        """Add uid to seen set; trim to 5k when limit reached to avoid unbounded growth."""
+        if len(self._seen_uids) >= 10_000:
+            self._seen_uids.clear()
+        self._seen_uids.add(uid)
+
+    @staticmethod
+    def _current_rss_mb() -> int:
+        """Current RSS in MB — works on Linux and macOS without psutil."""
+        import os, subprocess
+        pid = os.getpid()
+        try:
+            with open(f"/proc/{pid}/status") as fh:
+                for line in fh:
+                    if line.startswith("VmRSS:"):
+                        return int(line.split()[1]) // 1024
+        except Exception:
+            pass
+        try:
+            out = subprocess.check_output(
+                ["ps", "-o", "rss=", "-p", str(pid)], stderr=subprocess.DEVNULL
+            )
+            return int(out.strip()) // 1024
+        except Exception:
+            return 0
+
     @staticmethod
     def _fetch_feed(url: str):
         """Download and parse one RSS feed; connection returns to the capped pool."""
@@ -304,20 +330,10 @@ class NewsEngine:
 
     def _loop(self):
         import os as _os
-        _MB = 1024 * 1024
         _MEM_LIMIT_MB = int(_os.getenv("NEWS_ENGINE_MEM_MB", "400"))
         while self._running:
             try:
-                # Guard: stop polling if this process is using too much RAM
-                try:
-                    rss_mb = open("/proc/self/status").read()  # Linux
-                    rss_mb = int([l for l in rss_mb.splitlines() if "VmRSS" in l][0].split()[1]) // 1024
-                except Exception:
-                    try:
-                        import resource
-                        rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // _MB
-                    except Exception:
-                        rss_mb = 0
+                rss_mb = self._current_rss_mb()
                 if rss_mb > _MEM_LIMIT_MB:
                     logger.warning("NewsEngine RSS %dMB > limit %dMB — pausing poll", rss_mb, _MEM_LIMIT_MB)
                     gc.collect()
@@ -366,7 +382,7 @@ class NewsEngine:
                     uid = hashlib.md5((entry.get("link", entry.get("title", "")) or "").encode()).hexdigest()
                     if uid in self._seen_uids:
                         continue
-                    self._seen_uids.add(uid)
+                    self._add_seen(uid)
 
                     # ── Staleness check ──────────────────────────────────────
                     pub_dt = self._parse_pub_dt(entry)
