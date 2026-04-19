@@ -12,6 +12,7 @@ No external API key required — uses free RSS feeds.
 """
 
 import calendar
+import gc
 import hashlib
 import logging
 import re
@@ -23,9 +24,15 @@ from collections import deque
 
 import feedparser
 import requests as _requests
+from requests.adapters import HTTPAdapter
 
 _HTTP_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; CryptoNewsBot/1.0)"}
 _HTTP_TIMEOUT = 10
+
+# Single session with a capped connection pool — prevents socket accumulation
+_SESSION = _requests.Session()
+_SESSION.mount("https://", HTTPAdapter(pool_connections=4, pool_maxsize=4))
+_SESSION.mount("http://",  HTTPAdapter(pool_connections=4, pool_maxsize=4))
 
 logger = logging.getLogger(__name__)
 
@@ -236,11 +243,7 @@ class NewsEngine:
         max_age = timedelta(minutes=MAX_ARTICLE_AGE_MIN)
         for source_name, url in RSS_FEEDS:
             try:
-                try:
-                    resp = _requests.get(url, headers=_HTTP_HEADERS, timeout=_HTTP_TIMEOUT, verify=False)
-                    feed = feedparser.parse(resp.text)
-                except Exception:
-                    feed = feedparser.parse(url)
+                feed = self._fetch_feed(url)
                 for entry in feed.entries[:5]:
                     uid = hashlib.md5(
                         (entry.get("link", entry.get("title", "")) or "").encode()
@@ -288,12 +291,25 @@ class NewsEngine:
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _fetch_feed(url: str):
+        """Download and parse one RSS feed; connection returns to the capped pool."""
+        try:
+            resp = _SESSION.get(url, headers=_HTTP_HEADERS, timeout=_HTTP_TIMEOUT, verify=False)
+            text = resp.text
+            resp.close()
+            return feedparser.parse(text)
+        except Exception:
+            return feedparser.parse(url)
+
     def _loop(self):
         while self._running:
             try:
                 self._poll_all_feeds()
             except Exception as e:
                 logger.error("NewsEngine poll error: %s", e)
+            finally:
+                gc.collect()  # free feedparser parse trees; Python won't do this on its own
             for _ in range(POLL_INTERVAL):
                 if not self._running:
                     break
@@ -327,11 +343,7 @@ class NewsEngine:
 
         for source_name, url in RSS_FEEDS:
             try:
-                try:
-                    resp = _requests.get(url, headers=_HTTP_HEADERS, timeout=_HTTP_TIMEOUT, verify=False)
-                    feed = feedparser.parse(resp.text)
-                except Exception:
-                    feed = feedparser.parse(url)
+                feed = self._fetch_feed(url)
 
                 for entry in feed.entries[:5]:    # top 5 per feed — 15 feeds × 5 = 75 max/poll
                     uid = hashlib.md5((entry.get("link", entry.get("title", "")) or "").encode()).hexdigest()
