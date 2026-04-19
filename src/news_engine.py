@@ -303,9 +303,26 @@ class NewsEngine:
             return feedparser.parse(url)
 
     def _loop(self):
+        import os as _os
+        _MB = 1024 * 1024
+        _MEM_LIMIT_MB = int(_os.getenv("NEWS_ENGINE_MEM_MB", "400"))
         while self._running:
             try:
-                self._poll_all_feeds()
+                # Guard: stop polling if this process is using too much RAM
+                try:
+                    rss_mb = open("/proc/self/status").read()  # Linux
+                    rss_mb = int([l for l in rss_mb.splitlines() if "VmRSS" in l][0].split()[1]) // 1024
+                except Exception:
+                    try:
+                        import resource
+                        rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // _MB
+                    except Exception:
+                        rss_mb = 0
+                if rss_mb > _MEM_LIMIT_MB:
+                    logger.warning("NewsEngine RSS %dMB > limit %dMB — pausing poll", rss_mb, _MEM_LIMIT_MB)
+                    gc.collect()
+                else:
+                    self._poll_all_feeds()
             except Exception as e:
                 logger.error("NewsEngine poll error: %s", e)
             finally:

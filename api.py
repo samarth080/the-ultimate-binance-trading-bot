@@ -1171,8 +1171,11 @@ async def get_logs(request: Request, limit: int = 100):
 
 @app.on_event("startup")
 async def _startup():
-    """Start the news engine in the background on server startup."""
-    _get_news_engine()
+    """Optionally start the news engine on boot (set NEWS_ENGINE=true to enable)."""
+    if os.getenv("NEWS_ENGINE", "false").lower() == "true":
+        _get_news_engine()
+    else:
+        api_log.info("NewsEngine disabled — set NEWS_ENGINE=true in .env to enable")
     asyncio.create_task(_daily_summary_loop())
 
 
