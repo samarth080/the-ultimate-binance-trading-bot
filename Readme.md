@@ -8,7 +8,7 @@
 ![Binance](https://img.shields.io/badge/exchange-Binance%20Futures-yellow.svg)
 ![Status](https://img.shields.io/badge/status-active-success.svg)
 
-*A full-stack algorithmic trading system for Binance Futures — multi-timeframe signal engine, news-driven auto-trading, ATR-based risk management, Telegram alerts, and a live terminal-style web UI.*
+*A full-stack algorithmic trading system for Binance Futures — multi-timeframe signal engine, intelligence-gated entries, Kelly Criterion sizing, news-driven auto-trading, ATR-based risk management, Telegram alerts, and a live terminal-style web UI.*
 
 </div>
 
@@ -25,6 +25,7 @@
 - [Web UI Tabs](#web-ui-tabs)
 - [API Endpoints](#api-endpoints)
 - [Risk Management](#risk-management)
+- [Intelligence Engine](#intelligence-engine)
 - [Telegram Notifications](#telegram-notifications)
 - [Security](#security)
 - [Disclaimer](#disclaimer)
@@ -35,9 +36,30 @@
 
 ### Web UI (Terminal-Style Dashboard)
 - Live BTC / ETH / SOL price tickers in the header, updated every 15 seconds
-- Five tabs: **ML Analytics**, **Signal Engine**, **Scanner**, **Trade Stats**, **News**
+- Nine tabs: **ML Analytics**, **Signal Engine**, **Scanner**, **Trade Stats**, **News**, **Live Stream**, **Journal**, **SOUL**, **Kelly**
 - System log panel with ALL / INFO / WARN / ERR filters and live tail
 - Status bar: connection status, API key status, risk state, last action
+
+### Intelligence Engine
+- SQLite-backed persistent memory (`data/intelligence.db`) that survives restarts
+- **SOUL** — configurable personality gates: skip volatile TIER_2 signals, skip adverse regimes, minimum confidence thresholds
+- **Trade Journal** — every closed trade is recorded with entry/exit/PnL/regime/confidence for future learning
+- **Lesson extraction** — automatically flags consecutive losses and low-confidence patterns
+- **SOUL.md** — human-readable narrative of the bot's learned trading personality, editable from the dashboard
+
+### Signal Quality Tiers
+| Tier | Score | HTF Confirmed | Regime | Action |
+|------|-------|---------------|--------|--------|
+| TIER_1 | ≥ 80 | Yes | TRENDING / NEUTRAL | Emitted — full Kelly size |
+| TIER_2 | ≥ 65 | Any | Any | Emitted — half Kelly size (unless SOUL gate blocks) |
+| TIER_3 | < 65 | — | — | Near-miss recorded only, no trade |
+
+### Kelly Criterion Position Sizing
+- Half-Kelly formula: `f = (edge / odds) × 0.5`
+- Confidence scaling: size × (confidence / 100)
+- Drawdown multiplier: reduces size when equity is below peak
+- Hard cap at 5% of equity per trade
+- Requires 20+ historical trades to activate; falls back to ATR sizing before then
 
 ### Signal Engine
 - Multi-timeframe confluence analysis (primary TF + confirmation TF)
@@ -53,12 +75,12 @@
 - Selectable primary TF and confirmation TF before scanning
 
 ### News Auto-Trade
-- Monitors 15+ RSS feeds (CoinDesk, CoinTelegraph, Reuters, Bloomberg Crypto, Decrypt, etc.)
+- Monitors 15+ RSS feeds (CoinDesk, CoinTelegraph, The Block, Decrypt, Blockworks, etc.)
+- Opt-in via `NEWS_ENGINE=true` env var — disabled by default to keep RAM usage low
 - NLP keyword scoring: each headline scored for bullish/bearish sentiment per symbol
 - Automatically opens a futures position when score exceeds threshold
-- Auto-calculates TP and SL using ATR at time of entry
-- Auto-closes position on opposite signal or TP/SL hit
-- Sends Telegram alerts on entry, exit, and errors
+- Per-symbol cooldown (120s) prevents duplicate signals from the same article batch
+- Memory-safe: capped connection pool, explicit GC after each poll, RSS guard pauses polling if process exceeds `NEWS_ENGINE_MEM_MB` (default 400MB)
 
 ### Order Types
 | Type | Description |
@@ -102,17 +124,18 @@
 
 ```
 Browser (index.html)
-        │  fetch / WebSocket
+        │  fetch / WebSocket (/ws, /ws/log)
         ▼
   FastAPI  (api.py)  ── port 8000
         │
-        ├── SignalEngine    (src/signal_engine.py)   multi-TF confluence
-        ├── NewsEngine      (src/news_engine.py)     RSS + NLP scoring
-        ├── RiskManager     (src/risk_manager.py)    sizing + drawdown guard
-        ├── TradeTracker    (src/trade_tracker.py)   SQLite journal
-        ├── TelegramNotifier(src/notifications.py)   async Telegram alerts
-        ├── StrategyEngine  (src/strategy_engine.py) auto-scan loop
-        └── Binance SDK     (binance-futures-connector)
+        ├── SignalEngine       (src/signal_engine.py)    multi-TF confluence + signal tiers
+        ├── IntelligenceEngine (src/intelligence.py)     SOUL gates, Kelly sizing, journal
+        ├── NewsEngine         (src/news_engine.py)      RSS + NLP scoring (opt-in)
+        ├── RiskManager        (src/risk_manager.py)     ATR sizing + Kelly override
+        ├── TradeTracker       (src/trade_tracker.py)    SQLite trade journal
+        ├── TelegramNotifier   (src/notifications.py)    async Telegram alerts
+        ├── StrategyEngine     (src/strategy_engine.py)  auto-scan loop
+        └── Binance SDK        (binance-futures-connector)
 ```
 
 ---
@@ -125,11 +148,12 @@ binance-trading-bot/
 ├── config.json                   # Symbols, risk params, TWAP defaults, Telegram config
 ├── requirements.txt
 ├── frontend/
-│   └── index.html                # Single-file terminal web UI
+│   └── index.html                # Single-file terminal web UI (9 tabs)
 ├── src/
-│   ├── signal_engine.py          # Multi-TF confluence signal generator
-│   ├── news_engine.py            # RSS feed fetcher + NLP scorer
-│   ├── risk_manager.py           # ATR sizing, drawdown guard, trailing stop
+│   ├── signal_engine.py          # Multi-TF confluence signal generator + signal tiers
+│   ├── intelligence.py           # IntelligenceEngine: SOUL, Kelly, journal, lessons
+│   ├── news_engine.py            # RSS feed fetcher + NLP scorer (memory-safe)
+│   ├── risk_manager.py           # ATR sizing + Kelly override, drawdown guard
 │   ├── trade_tracker.py          # SQLite trade journal + equity curve
 │   ├── notifications.py          # Telegram async notifier
 │   ├── strategy_engine.py        # Symbol scan loop (strategy auto-mode)
@@ -140,11 +164,17 @@ binance-trading-bot/
 │       ├── oco.py                # OCO order logic
 │       ├── stop_limit_orders.py  # Stop-limit logic
 │       └── twap.py               # TWAP execution engine
+├── data/
+│   ├── intelligence.db           # SQLite intelligence memory (auto-created)
+│   └── SOUL.md                   # Bot trading personality (auto-generated, editable)
 ├── logs/
 │   ├── trades.db                 # SQLite trade journal (auto-created)
 │   ├── risk_state.json           # Daily risk state (auto-created)
 │   └── bot.log                   # Application log
-└── docs/
+└── tests/
+    ├── test_intelligence.py
+    ├── test_signal_tiers.py
+    └── backtesting/
 ```
 
 ---
@@ -159,8 +189,8 @@ binance-trading-bot/
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/samarth080/binance-trading-bot.git
-cd binance-trading-bot
+git clone https://github.com/samarth080/the-ultimate-binance-trading-bot.git
+cd the-ultimate-binance-trading-bot
 ```
 
 ### 2. Create and activate a virtual environment
@@ -203,6 +233,12 @@ MAX_DAILY_LOSS_PCT=0.05
 DRAWDOWN_HALT_PCT=0.10
 MAX_OPEN_POSITIONS=10
 MIN_RR_RATIO=1.5
+
+# News engine — disabled by default, enable to poll RSS feeds
+NEWS_ENGINE=false
+
+# News engine RAM guard — pause polling if process RSS exceeds this (MB)
+NEWS_ENGINE_MEM_MB=400
 ```
 
 ### config.json
@@ -245,13 +281,14 @@ Key sections:
 ## Running the Bot
 
 ```bash
-# Start the API server and web UI
-python3 api.py
+# Start with news engine disabled (recommended for low RAM usage)
+uvicorn api:app --host 0.0.0.0 --port 8000 --reload
+
+# Start with news engine enabled
+NEWS_ENGINE=true uvicorn api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 Then open [http://localhost:8000](http://localhost:8000) in your browser.
-
-The server runs on port 8000. The web UI is served from `frontend/index.html` at the root path.
 
 ---
 
@@ -266,6 +303,7 @@ The server runs on port 8000. The web UI is served from `frontend/index.html` at
 - Select symbol, primary TF, confirmation TF, click **RUN ANALYSIS**
 - Returns overall direction (LONG / SHORT / FLAT), confidence %, and the list of confluence reasons
 - Shows ATR-based stop-loss and take-profit levels
+- Signals are classified into TIER_1 / TIER_2 / TIER_3 based on score and HTF confirmation
 
 ### Scanner
 - Click **SCAN ALL** to scan all configured symbols in parallel
@@ -278,9 +316,28 @@ The server runs on port 8000. The web UI is served from `frontend/index.html` at
 - Equity curve chart (line chart of cumulative P&L over time)
 
 ### News
-- Live feed from 15+ crypto news sources
+- Live feed from 15+ crypto news sources (requires `NEWS_ENGINE=true`)
 - Each article scored for bullish/bearish sentiment per symbol
 - **Auto-Trade** toggle: when enabled, high-confidence news signals open real positions
+
+### Live Stream
+- Real-time structured event log streamed over WebSocket (`/ws/log`)
+- Filter by event type: ALL / SIGNAL / TRADE / ERROR
+- Live tail of bot decisions as they happen
+
+### Journal
+- Full history of every closed trade recorded by the Intelligence Engine
+- Entry price, exit price, P&L, tier, confidence, regime, and lessons learned per trade
+
+### SOUL
+- View and edit the bot's trading personality (`data/SOUL.md`)
+- Gates visible: `skip_volatile_tier2`, `skip_regimes`, `min_confidence`
+- Changes take effect on the next signal evaluation
+
+### Kelly
+- Current Kelly Criterion parameters derived from trade history
+- Win rate, average win/loss, computed Kelly fraction, half-Kelly size
+- Requires 20+ historical trades; shows "insufficient data" until then
 
 ---
 
@@ -300,6 +357,10 @@ The server runs on port 8000. The web UI is served from `frontend/index.html` at
 | GET | `/api/risk/status` | Current risk manager state |
 | GET | `/api/news` | Latest news articles with sentiment scores |
 | GET | `/api/news/signals` | High-confidence news-driven signals |
+| GET | `/api/journal` | Full trade journal from Intelligence Engine |
+| GET | `/api/soul` | Current SOUL.md content and parsed gates |
+| POST | `/api/soul` | Update SOUL.md content |
+| GET | `/api/kelly` | Current Kelly Criterion parameters and sizing |
 | GET | `/api/logs` | Last N lines of system log |
 | POST | `/api/order/market` | Place a market order |
 | POST | `/api/order/limit` | Place a limit order |
@@ -307,6 +368,8 @@ The server runs on port 8000. The web UI is served from `frontend/index.html` at
 | POST | `/api/order/stop_limit` | Place a stop-limit order |
 | POST | `/api/order/twap` | Start a TWAP execution |
 | POST | `/api/news/auto_trade` | Trigger news-based auto-trade evaluation |
+| WS | `/ws` | Live price + signal WebSocket stream |
+| WS | `/ws/log` | Structured event log stream (signals, trades, errors) |
 
 ---
 
@@ -314,13 +377,36 @@ The server runs on port 8000. The web UI is served from `frontend/index.html` at
 
 The `RiskManager` (`src/risk_manager.py`) enforces five rules on every trade:
 
-1. **Position sizing** — risk exactly `RISK_PER_TRADE_PCT` of current equity per trade, using ATR stop distance to back-calculate quantity
+1. **Position sizing** — risk exactly `RISK_PER_TRADE_PCT` of current equity per trade, using ATR stop distance to back-calculate quantity. Overridden by Kelly sizing once 20+ trades are recorded.
 2. **Daily loss limit** — if cumulative daily P&L falls below `MAX_DAILY_LOSS_PCT × equity`, all trading halts for the rest of the day
 3. **Drawdown guard** — if equity falls more than `DRAWDOWN_HALT_PCT` from its all-time peak, trading halts
 4. **Open position cap** — no new trades if `open_positions >= MAX_OPEN_POSITIONS`
 5. **Minimum R:R** — trades with `TP distance / SL distance < MIN_RR_RATIO` are rejected before any order is sent
 
 State is persisted to `logs/risk_state.json` so limits survive server restarts within the same trading day.
+
+---
+
+## Intelligence Engine
+
+The `IntelligenceEngine` (`src/intelligence.py`) provides persistent memory and adaptive sizing:
+
+### SOUL Gates
+Edit `data/SOUL.md` or use the SOUL tab in the dashboard to configure:
+- `skip_volatile_tier2: true` — skip TIER_2 signals during high-volatility regimes
+- `skip_regimes: [VOLATILE]` — list of market regimes to avoid entirely
+- `min_confidence: 70` — minimum confidence score required to enter a trade
+
+### Kelly Criterion
+After 20+ closed trades are recorded, the bot switches from fixed ATR sizing to half-Kelly:
+```
+kelly_fraction = (win_rate × avg_win - loss_rate × avg_loss) / avg_win × 0.5
+position_usdt  = equity × kelly_fraction × (confidence / 100) × drawdown_multiplier
+```
+Capped at 5% of equity per trade regardless of Kelly output.
+
+### Trade Journal
+Every closed trade is saved with: symbol, direction, tier, confidence, entry/exit price, PnL, regime, and any lessons extracted. Viewable in the Journal tab or via `/api/journal`.
 
 ---
 
@@ -357,6 +443,5 @@ Always test thoroughly on Binance Testnet (`USE_TESTNET=true`) before enabling l
 ---
 
 <div align="center">
-Built with love by samarth and udai · 
-<!-- Binance Futures Connector · pandas · asyncio -->
+Built with love by samarth and udai
 </div>
