@@ -15,8 +15,9 @@ import os
 import secrets
 import sys
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
+import tempfile
 from typing import Any, Dict, List, Optional
 
 # ── Load .env BEFORE importing bot modules (they call sys.exit if keys missing) ──
@@ -33,6 +34,12 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 import uvicorn
+
+from backtesting.types import BacktestConfig
+from backtesting.data_loader import download_klines, _tf_to_ms
+from backtesting.data_feed import DataFeed
+from backtesting.backtester import Backtester
+from backtesting.performance import calculate_performance_report
 
 # Add src/ to path so bot modules are importable
 sys.path.insert(0, str(Path(__file__).parent / "src"))
@@ -278,6 +285,84 @@ class TWAPOrderReq(BaseModel):
         if not (5 <= v <= 3600):
             raise ValueError("interval_seconds must be between 5 and 3600")
         return v
+
+
+def _get_client():
+    """Return a Binance UMFutures client using env vars."""
+    from binance.um_futures import UMFutures
+    use_testnet = os.getenv("USE_TESTNET", "true").lower() == "true"
+    base_url = "https://testnet.binancefuture.com" if use_testnet else "https://fapi.binance.com"
+    return UMFutures(
+        key=os.getenv("BINANCE_API_KEY"),
+        secret=os.getenv("BINANCE_SECRET_KEY"),
+        base_url=base_url,
+    )
+
+
+class BacktestRequest(BaseModel):
+    symbols: list[str] = ["BTCUSDT"]
+    primary_tf: str = "5m"
+    confirm_tf: str = "1h"
+    start_date: str = "2024-01-01"
+    end_date: str = "2024-03-01"
+    initial_capital: float = 10_000.0
+
+
+@app.post("/api/backtest/run")
+@limiter.limit("3/minute")
+async def run_backtest(request: Request, body: BacktestRequest):
+    try:
+        start = datetime.fromisoformat(body.start_date).replace(tzinfo=timezone.utc)
+        end   = datetime.fromisoformat(body.end_date).replace(tzinfo=timezone.utc)
+    except ValueError as e:
+        raise HTTPException(400, f"Invalid date format: {e}")
+
+    if end <= start:
+        raise HTTPException(400, "end_date must be after start_date")
+    if (end - start).days > 180:
+        raise HTTPException(400, "Date range cannot exceed 180 days")
+
+    cfg = BacktestConfig(
+        symbols=body.symbols,
+        primary_tf=body.primary_tf,
+        confirm_tf=body.confirm_tf,
+        start=start,
+        end=end,
+        initial_capital=body.initial_capital,
+        mode="portfolio",
+    )
+
+    client = _get_client()
+    cache_dir = Path("data/cache")
+    bars = {}
+
+    for sym in cfg.symbols:
+        for tf in [cfg.primary_tf, cfg.confirm_tf]:
+            pad_ms  = _tf_to_ms(tf) * 200
+            padded  = datetime.fromtimestamp(start.timestamp() - pad_ms / 1000, tz=timezone.utc)
+            bars[(sym, tf)] = download_klines(client, sym, tf, padded, end, cache_dir)
+
+    feed = DataFeed(
+        bars=bars, primary_tf=cfg.primary_tf,
+        symbols=cfg.symbols, start=start, end=end,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        bt = Backtester(config=cfg, feed=feed, run_dir=Path(tmp))
+        trades_df, _ = bt.run()
+
+    metrics = calculate_performance_report(trades_df, bt.equity_curve, body.initial_capital)
+
+    equity_curve = [
+        {
+            "t": pt["timestamp"].isoformat()
+                 if hasattr(pt["timestamp"], "isoformat") else str(pt["timestamp"]),
+            "v": round(pt["equity"], 2),
+        }
+        for pt in bt.equity_curve
+    ]
+
+    return {"metrics": metrics, "equity_curve": equity_curve, "trade_count": len(trades_df)}
 
 
 # ── Lazy bot singletons ────────────────────────────────────────────────────────
