@@ -441,6 +441,7 @@ select.finput option { background:#0b0b0e; }
         <div class="ctab"        data-view="journal">JOURNAL</div>
         <div class="ctab"        data-view="soul">SOUL</div>
         <div class="ctab"        data-view="kelly">KELLY</div>
+        <div class="ctab"        data-view="backtest">BACKTEST</div>
       </div>
       <!-- Per-view controls live here, toggled by JS -->
       <div id="ctrl-analytics" style="padding:0 12px;display:flex;align-items:center;gap:10px;">
@@ -633,6 +634,52 @@ select.finput option { background:#0b0b0e; }
         <table style="width:100%;border-collapse:collapse;font-size:12px">
           <tbody id="kelly-stats-tbody"></tbody>
         </table>
+      </div>
+    </div>
+
+    <!-- BACKTEST VIEW -->
+    <div id="view-backtest" class="cview" style="display:none">
+      <div class="panel" style="max-width:700px;margin:0 auto">
+        <div class="panel-title">BACKTEST</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+          <div>
+            <label class="lbl">SYMBOL</label>
+            <select id="bt-symbol" class="inp">
+              <option>BTCUSDT</option><option>ETHUSDT</option>
+              <option>SOLUSDT</option><option>BNBUSDT</option>
+            </select>
+          </div>
+          <div>
+            <label class="lbl">CAPITAL (USDT)</label>
+            <input id="bt-capital" class="inp" type="number" value="10000" min="100">
+          </div>
+          <div>
+            <label class="lbl">START DATE</label>
+            <input id="bt-start" class="inp" type="date" value="2024-01-01">
+          </div>
+          <div>
+            <label class="lbl">END DATE</label>
+            <input id="bt-end" class="inp" type="date" value="2024-03-01">
+          </div>
+          <div>
+            <label class="lbl">PRIMARY TF</label>
+            <select id="bt-ptf" class="inp">
+              <option>5m</option><option>15m</option><option>1h</option>
+            </select>
+          </div>
+          <div>
+            <label class="lbl">CONFIRM TF</label>
+            <select id="bt-ctf" class="inp">
+              <option>1h</option><option>4h</option><option>1d</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn" onclick="runBacktest()" style="width:100%">RUN BACKTEST</button>
+        <div id="bt-status" style="margin-top:8px;color:#aaa;font-size:12px"></div>
+        <div id="bt-results" style="display:none;margin-top:18px">
+          <div id="bt-metrics" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px"></div>
+          <canvas id="bt-chart" height="120"></canvas>
+        </div>
       </div>
     </div>
 
@@ -1812,6 +1859,87 @@ function setAction(msg) { id('sb-action').textContent = msg; }
   var kellyTab = document.querySelector('.ctab[data-view="kelly"]');
   if (kellyTab) kellyTab.addEventListener('click', loadKelly);
   loadKelly();
+})();
+
+(function () {
+  var _btChart = null;
+
+  function makeMetricCard(label, value, positive) {
+    var card = document.createElement("div");
+    card.style.cssText = "background:#111;border:1px solid #333;padding:10px;border-radius:4px";
+    var lbl = document.createElement("div");
+    lbl.style.cssText = "font-size:10px;color:#888";
+    lbl.textContent = label;
+    var val = document.createElement("div");
+    val.style.cssText = "font-size:18px;font-weight:bold;color:" + (positive ? "#0f0" : "#f44");
+    val.textContent = value;
+    card.appendChild(lbl);
+    card.appendChild(val);
+    return card;
+  }
+
+  window.runBacktest = function () {
+    var status  = document.getElementById("bt-status");
+    var results = document.getElementById("bt-results");
+    status.textContent = "Running backtest... this may take 30-60s on first run (downloading data)";
+    results.style.display = "none";
+
+    fetch("/api/backtest/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        symbols:         [document.getElementById("bt-symbol").value],
+        primary_tf:      document.getElementById("bt-ptf").value,
+        confirm_tf:      document.getElementById("bt-ctf").value,
+        start_date:      document.getElementById("bt-start").value,
+        end_date:        document.getElementById("bt-end").value,
+        initial_capital: parseFloat(document.getElementById("bt-capital").value),
+      }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.detail) { status.textContent = "Error: " + d.detail; return; }
+        status.textContent = "";
+        var m = d.metrics;
+
+        var cards = [
+          { label: "SHARPE",    value: (+(m.sharpe_ratio   || 0)).toFixed(2),          pos: (m.sharpe_ratio   || 0) >= 0 },
+          { label: "CAGR",      value: ((m.cagr            || 0) * 100).toFixed(1) + "%", pos: (m.cagr || 0) >= 0 },
+          { label: "MAX DD",    value: ((m.max_drawdown_pct || 0) * 100).toFixed(1) + "%", pos: false },
+          { label: "WIN RATE",  value: (+(m.win_rate        || 0)).toFixed(1) + "%",    pos: (m.win_rate || 0) >= 50 },
+          { label: "TRADES",    value: String(m.total_trades || 0),                     pos: true },
+          { label: "TOTAL PnL", value: "$" + (+(m.total_pnl  || 0)).toFixed(2),        pos: (m.total_pnl || 0) >= 0 },
+          { label: "FINAL EQ",  value: "$" + (+(m.final_equity || 0)).toFixed(2),      pos: (m.final_equity || 0) >= 0 },
+          { label: "SORTINO",   value: (+(m.sortino_ratio   || 0)).toFixed(2),          pos: (m.sortino_ratio || 0) >= 0 },
+        ];
+
+        var container = document.getElementById("bt-metrics");
+        container.textContent = "";
+        cards.forEach(function (c) { container.appendChild(makeMetricCard(c.label, c.value, c.pos)); });
+
+        var labels = d.equity_curve.map(function (p) { return p.t.slice(0, 10); });
+        var values = d.equity_curve.map(function (p) { return p.v; });
+
+        if (_btChart) _btChart.destroy();
+        _btChart = new Chart(document.getElementById("bt-chart").getContext("2d"), {
+          type: "line",
+          data: {
+            labels: labels,
+            datasets: [{ label: "Equity (USDT)", data: values, borderColor: "#0cf", borderWidth: 1.5, pointRadius: 0, fill: false }],
+          },
+          options: {
+            animation: false,
+            plugins: { legend: { labels: { color: "#ccc" } } },
+            scales: {
+              x: { ticks: { color: "#888", maxTicksLimit: 8 }, grid: { color: "#222" } },
+              y: { ticks: { color: "#888" }, grid: { color: "#222" } },
+            },
+          },
+        });
+        results.style.display = "block";
+      })
+      .catch(function (e) { status.textContent = "Error: " + String(e); });
+  };
 })();
 </script>
 </body>
