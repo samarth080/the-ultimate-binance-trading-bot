@@ -7,6 +7,7 @@
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Binance](https://img.shields.io/badge/exchange-Binance%20Futures-yellow.svg)
 ![Status](https://img.shields.io/badge/status-active-success.svg)
+![CI](https://github.com/samarth080/the-ultimate-binance-trading-bot/actions/workflows/ci.yml/badge.svg)
 
 *A full-stack algorithmic trading system for Binance Futures — multi-timeframe signal engine, intelligence-gated entries, Kelly Criterion sizing, news-driven auto-trading, ATR-based risk management, Telegram alerts, and a live terminal-style web UI.*
 
