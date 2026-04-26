@@ -26,9 +26,12 @@ from dotenv import find_dotenv, load_dotenv
 _dotenv = find_dotenv(usecwd=True)
 load_dotenv(_dotenv or (Path(__file__).parent / ".env"))
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from jose import JWTError, jwt
+from passlib.context import CryptContext
 from pydantic import BaseModel, field_validator, model_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -78,19 +81,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Optional API-key auth for all /api/* routes ───────────────────────────────
-# Set UI_API_KEY in .env to require this header from the browser.
-# Why: without auth, anyone on your LAN (or port-forwarded internet) can trade.
-_UI_API_KEY: Optional[str] = os.getenv("UI_API_KEY") or None
+# ── JWT auth ───────────────────────────────────────────────────────────────────
+_JWT_SECRET   = os.getenv("JWT_SECRET", "change-me-in-production")
+_JWT_ALGO     = "HS256"
+_JWT_EXP_MINS = 60 * 8  # 8 hours
 
-async def _require_auth(request: Request):
-    """Dependency — call on every trading endpoint."""
-    if _UI_API_KEY is None:
-        return  # auth disabled (local-only use)
-    provided = request.headers.get("X-API-Key", "")
-    # secrets.compare_digest prevents timing attacks
-    if not provided or not secrets.compare_digest(provided, _UI_API_KEY):
-        raise HTTPException(401, "Unauthorized")
+_pwd_ctx  = CryptContext(schemes=["bcrypt"], deprecated="auto")
+_oauth2   = OAuth2PasswordBearer(tokenUrl="/api/auth/token", auto_error=False)
+
+_DASH_USER = os.getenv("DASHBOARD_USER", "admin")
+_DASH_PASS = os.getenv("DASHBOARD_PASS", "changeme")
+_DASH_HASH = _pwd_ctx.hash(_DASH_PASS)
+
+
+def _create_token(username: str) -> str:
+    exp = datetime.utcnow() + timedelta(minutes=_JWT_EXP_MINS)
+    return jwt.encode({"sub": username, "exp": exp}, _JWT_SECRET, algorithm=_JWT_ALGO)
+
+
+async def _require_auth(token: str = Depends(_oauth2)):
+    if not token:
+        raise HTTPException(401, "Not authenticated")
+    try:
+        payload = jwt.decode(token, _JWT_SECRET, algorithms=[_JWT_ALGO])
+        if not payload.get("sub"):
+            raise HTTPException(401, "Invalid token")
+    except JWTError:
+        raise HTTPException(401, "Invalid or expired token")
 
 # ── In-memory log buffer ───────────────────────────────────────────────────────
 log_buffer: deque = deque(maxlen=500)
@@ -299,6 +316,13 @@ def _get_client():
     )
 
 
+@app.post("/api/auth/token")
+async def login(form: OAuth2PasswordRequestForm = Depends()):
+    if form.username != _DASH_USER or not _pwd_ctx.verify(form.password, _DASH_HASH):
+        raise HTTPException(401, "Incorrect username or password")
+    return {"access_token": _create_token(form.username), "token_type": "bearer"}
+
+
 class BacktestRequest(BaseModel):
     symbols: list[str] = ["BTCUSDT"]
     primary_tf: str = "5m"
@@ -310,7 +334,7 @@ class BacktestRequest(BaseModel):
 
 @app.post("/api/backtest/run")
 @limiter.limit("3/minute")
-async def run_backtest(request: Request, body: BacktestRequest):
+async def run_backtest(request: Request, body: BacktestRequest, _: str = Depends(_require_auth)):
     try:
         start = datetime.fromisoformat(body.start_date).replace(tzinfo=timezone.utc)
         end   = datetime.fromisoformat(body.end_date).replace(tzinfo=timezone.utc)
@@ -793,8 +817,7 @@ async def status(request: Request):
 
 @app.post("/api/order/market")
 @limiter.limit(_RATE_TRADE)
-async def market_order(request: Request, req: MarketOrderReq):
-    await _require_auth(request)
+async def market_order(request: Request, req: MarketOrderReq, _: str = Depends(_require_auth)):
     api_log.info(f"MARKET {req.side} {req.quantity} {req.symbol} dry={req.dry_run}")
     bot = _market()
     if req.dry_run:
@@ -811,8 +834,7 @@ async def market_order(request: Request, req: MarketOrderReq):
 
 @app.post("/api/order/limit")
 @limiter.limit(_RATE_TRADE)
-async def limit_order(request: Request, req: LimitOrderReq):
-    await _require_auth(request)
+async def limit_order(request: Request, req: LimitOrderReq, _: str = Depends(_require_auth)):
     api_log.info(f"LIMIT {req.side} {req.quantity} {req.symbol} @ {req.price} dry={req.dry_run}")
     bot = _limit()
     if req.dry_run:
@@ -831,8 +853,7 @@ async def limit_order(request: Request, req: LimitOrderReq):
 
 @app.post("/api/order/oco")
 @limiter.limit(_RATE_TRADE)
-async def oco_order(request: Request, req: OCOOrderReq):
-    await _require_auth(request)
+async def oco_order(request: Request, req: OCOOrderReq, _: str = Depends(_require_auth)):
     api_log.info(f"OCO {req.side} {req.quantity} {req.symbol} dry={req.dry_run}")
     try:
         from advanced.oco import BinanceOCOBot
@@ -853,8 +874,7 @@ async def oco_order(request: Request, req: OCOOrderReq):
 
 @app.post("/api/order/stop_limit")
 @limiter.limit(_RATE_TRADE)
-async def stop_limit_order(request: Request, req: StopLimitOrderReq):
-    await _require_auth(request)
+async def stop_limit_order(request: Request, req: StopLimitOrderReq, _: str = Depends(_require_auth)):
     api_log.info(f"STOP-LIMIT {req.side} {req.quantity} {req.symbol} stop={req.stop_price} lim={req.price}")
 
     notional = req.quantity * req.price
@@ -937,8 +957,7 @@ async def stop_limit_order(request: Request, req: StopLimitOrderReq):
 
 @app.post("/api/order/twap")
 @limiter.limit(_RATE_TWAP)
-async def twap_order(request: Request, req: TWAPOrderReq):
-    await _require_auth(request)
+async def twap_order(request: Request, req: TWAPOrderReq, _: str = Depends(_require_auth)):
     part_qty = req.total_quantity / req.parts
     api_log.info(f"TWAP {req.parts}× {part_qty:.6f} {req.symbol} every {req.interval_seconds}s dry={req.dry_run}")
 
@@ -1322,10 +1341,9 @@ async def get_news_signals(request: Request, limit: int = 20):
 
 @app.post("/api/news/auto_trade")
 @limiter.limit(_RATE_TRADE)
-async def set_auto_trade(request: Request, enabled: bool):
+async def set_auto_trade(request: Request, enabled: bool, _: str = Depends(_require_auth)):
     """Enable or disable automatic trade execution on news signals."""
     # Why: this directly controls live trade execution — must require auth
-    await _require_auth(request)
     engine = _get_news_engine()
     if not engine:
         raise HTTPException(503, "News engine unavailable")
@@ -1497,8 +1515,7 @@ async def get_soul(request: Request):
 
 @app.post("/api/soul")
 @limiter.limit(_RATE_TRADE)
-async def update_soul(request: Request, payload: dict):
-    await _require_auth(request)
+async def update_soul(request: Request, payload: dict, _: str = Depends(_require_auth)):
     text = payload.get("text", "")
     if not text.strip():
         raise HTTPException(400, "Empty SOUL text rejected")

@@ -242,6 +242,16 @@ NEWS_ENGINE=false
 NEWS_ENGINE_MEM_MB=400
 ```
 
+### Dashboard Auth
+
+The dashboard is protected by JWT. Add to `.env`:
+
+- `DASHBOARD_USER` — login username (default: `admin`)
+- `DASHBOARD_PASS` — login password (default: `changeme`)
+- `JWT_SECRET` — signing secret. Generate with: `python3 -c "import secrets; print(secrets.token_hex(32))"`
+
+Token expires after 8 hours. Read-only endpoints (`/api/status`, `/api/prices`, `/api/news`) remain public.
+
 ### config.json
 
 Key sections:
