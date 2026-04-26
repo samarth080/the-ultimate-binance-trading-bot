@@ -1595,7 +1595,19 @@ async def ws_endpoint(ws: WebSocket):
                     await ws.send_json({"type": "log", "data": entry})
                 last_sent = current_len
             else:
-                await ws.send_json({"type": "ping"})
+                tick = {"type": "ping"}
+                try:
+                    positions = _get_client().get_position_risk(recvWindow=5000)
+                    upnl = sum(
+                        float(p.get("unrealizedProfit", 0))
+                        for p in positions
+                        if float(p.get("positionAmt", 0)) != 0
+                    )
+                except Exception:
+                    upnl = None
+
+                tick["upnl"] = round(upnl, 2) if upnl is not None else None
+                await ws.send_json(tick)
     except (WebSocketDisconnect, Exception):
         if ws in _active_ws:
             _active_ws.remove(ws)

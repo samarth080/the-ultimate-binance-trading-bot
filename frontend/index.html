@@ -326,6 +326,7 @@ select.finput option { background:#0b0b0e; }
       <span class="tick-sym">SOL</span>
       <span class="tick-price" id="tick-sol">——</span>
     </div>
+    <span id="hdr-upnl" style="padding:4px 12px;border:1px solid #333;border-radius:4px;font-size:13px;margin-left:10px">PnL: <span id="upnl-val">--</span></span>
   </div>
   <div class="tb-ws" id="tb-ws"><span class="dot" id="ws-dot"></span><span id="ws-lbl">WS:OFF</span></div>
 </div>
@@ -794,6 +795,11 @@ function connectWS() {
     const m = JSON.parse(e.data);
     if (m.type === 'init') m.data.forEach(addLog);
     else if (m.type === 'log') addLog(m.data);
+    if (typeof m.upnl === "number") {
+      var upnlEl = document.getElementById("upnl-val");
+      upnlEl.textContent = (m.upnl >= 0 ? "+" : "") + "$" + m.upnl.toFixed(2);
+      upnlEl.style.color = m.upnl >= 0 ? "#0f0" : "#f44";
+    }
   };
   ws.onclose = () => { setWS(false); setTimeout(connectWS, 3000); };
   ws.onerror = () => ws.close();
