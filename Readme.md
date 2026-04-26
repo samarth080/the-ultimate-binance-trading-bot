@@ -291,6 +291,15 @@ NEWS_ENGINE=true uvicorn api:app --host 0.0.0.0 --port 8000 --reload
 
 Then open [http://localhost:8000](http://localhost:8000) in your browser.
 
+### Docker (one command)
+
+```bash
+docker compose up --build
+```
+
+Dashboard available at http://localhost:8000.
+Logs and trade data persist in `./logs` and `./data` via volume mounts.
+
 ---
 
 ## Web UI Tabs
