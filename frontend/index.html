@@ -310,7 +310,7 @@ select.finput option { background:#0b0b0e; }
   <div style="background:#111;border:1px solid #333;padding:32px;border-radius:8px;width:320px">
     <div style="font-size:18px;font-weight:bold;margin-bottom:20px;color:#0cf">LOGIN</div>
     <input id="login-user" class="inp" placeholder="Username" style="width:100%;margin-bottom:10px;box-sizing:border-box">
-    <input id="login-pass" class="inp" type="password" placeholder="Password" style="width:100%;margin-bottom:16px;box-sizing:border-box">
+    <input id="login-pass" class="inp" type="password" placeholder="Password" style="width:100%;margin-bottom:16px;box-sizing:border-box" onkeydown="if(event.key==='Enter')doLogin()">
     <button class="btn" onclick="doLogin()" style="width:100%">SIGN IN</button>
     <div id="login-err" style="color:#f44;margin-top:8px;font-size:12px"></div>
   </div>
@@ -1983,8 +1983,7 @@ function setAction(msg) { id('sb-action').textContent = msg; }
       .then(function (d) {
         if (d.access_token) {
           localStorage.setItem("jwt_token", d.access_token);
-          _token = d.access_token;
-          hideLogin();
+          window.location.reload();
         } else {
           document.getElementById("login-err").textContent = d.detail || "Login failed";
         }
@@ -1997,7 +1996,7 @@ function setAction(msg) { id('sb-action').textContent = msg; }
   var _origFetch = window.fetch;
   window.fetch = function (url, opts) {
     opts = opts || {};
-    if (_token && typeof url === "string" && url.startsWith("/api/")) {
+    if (_token && typeof url === "string" && (url.startsWith("/api/") || url.includes("/api/"))) {
       opts.headers = Object.assign({}, opts.headers, { Authorization: "Bearer " + _token });
     }
     return _origFetch(url, opts).then(function (r) {
