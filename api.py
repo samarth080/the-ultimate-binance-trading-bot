@@ -89,9 +89,9 @@ _JWT_EXP_MINS = 60 * 8  # 8 hours
 _pwd_ctx  = CryptContext(schemes=["bcrypt"], deprecated="auto")
 _oauth2   = OAuth2PasswordBearer(tokenUrl="/api/auth/token", auto_error=False)
 
-_DASH_USER = os.getenv("DASHBOARD_USER", "admin")
-_DASH_PASS = os.getenv("DASHBOARD_PASS", "changeme")
-_DASH_HASH = _pwd_ctx.hash(_DASH_PASS)
+_DASH_USER = os.getenv("DASHBOARD_USER")
+_DASH_PASS = os.getenv("DASHBOARD_PASS")
+_DASH_HASH = _pwd_ctx.hash(_DASH_PASS) if _DASH_PASS else None
 
 
 def _create_token(username: str) -> str:
@@ -318,7 +318,7 @@ def _get_client():
 
 @app.post("/api/auth/token")
 async def login(form: OAuth2PasswordRequestForm = Depends()):
-    if form.username != _DASH_USER or not _pwd_ctx.verify(form.password, _DASH_HASH):
+    if not _DASH_USER or not _DASH_HASH or form.username != _DASH_USER or not _pwd_ctx.verify(form.password, _DASH_HASH):
         raise HTTPException(401, "Incorrect username or password")
     return {"access_token": _create_token(form.username), "token_type": "bearer"}
 
