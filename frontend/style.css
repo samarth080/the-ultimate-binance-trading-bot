@@ -4,22 +4,22 @@
 :root {
   --bg:         #060608;
   --bg-panel:   #0b0b0e;
-  --bg-raised:  #0f0f13;
+  --bg-raised:  #12121c;
   --bg-hover:   #13131a;
   --border:     #1c1c26;
   --border-hi:  #2a2a3a;
   --text:       #b8acd0;
   --text-dim:   #454060;
-  --text-hi:    #ddd4f0;
+  --text-hi:    #e0e0f0;
   --amber:      #f0a020;
   --amber-glow: rgba(240,160,32,0.18);
   --amber-dim:  rgba(240,160,32,0.08);
   --buy:        #00e87a;
-  --buy-dim:    rgba(0,232,122,0.09);
+  --buy-dim:    rgba(0,232,122,0.08);
   --sell:       #ff2d55;
-  --sell-dim:   rgba(255,45,85,0.09);
+  --sell-dim:   rgba(255,45,85,0.08);
   --blue:       #4d8fff;
-  --blue-dim:   rgba(77,143,255,0.09);
+  --blue-dim:   rgba(77,143,255,0.08);
   --gold:       #ffd060;
   --purple:     #b06aff;
   --purple-dim: rgba(176,106,255,0.09);
@@ -299,3 +299,62 @@ select.finput option { background:#0b0b0e; }
 @keyframes blink   { 0%,100%{opacity:1}50%{opacity:0} }
 @keyframes pulse   { 0%,100%{opacity:1}50%{opacity:.3} }
 @keyframes slidein { from{opacity:0;transform:translateX(6px)} to{opacity:1;transform:none} }
+
+/* ── Overview Tab ──────────────────────────────────────────────────────────────────────────── */
+#view-overview {
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 12px;
+  align-content: start;
+  overflow-y: auto;
+}
+.ov-col   { display: flex; flex-direction: column; gap: 12px; }
+.ov-panel { background: var(--bg-panel); border: 1px solid var(--border); }
+
+.ov-badge      { font-size: 8px; padding: 2px 7px; border-radius: 2px; letter-spacing: .5px; border: 1px solid var(--border); color: var(--text-dim); }
+.ov-badge.ok   { background: var(--buy-dim);  border-color: rgba(0,232,122,.3);  color: var(--buy);  }
+.ov-badge.warn { background: var(--amber-dim); border-color: rgba(240,160,32,.3); color: var(--amber); }
+.ov-badge.halt { background: var(--sell-dim); border-color: rgba(255,45,85,.3);  color: var(--sell); }
+
+.ov-kpi-row { display: grid; grid-template-columns: repeat(3,1fr); gap: 1px; background: var(--border); }
+.ov-kpi     { background: var(--bg-panel); padding: 10px 12px; }
+.ov-kpi-lbl { font-size: 8px; letter-spacing: 1px; color: var(--text-dim); margin-bottom: 4px; }
+.ov-kpi-val { font-size: 16px; font-weight: 700; color: var(--text-hi); }
+.ov-kpi-sub { font-size: 8px; color: var(--text-dim); margin-top: 2px; }
+
+.ov-loss-bar-wrap  { padding: 10px 12px; border-top: 1px solid var(--border); }
+.ov-loss-bar-lbl   { display: flex; justify-content: space-between; font-size: 8px; color: var(--text-dim); margin-bottom: 5px; }
+.ov-loss-bar-track { height: 3px; background: var(--border); border-radius: 2px; }
+.ov-loss-bar-fill  { height: 100%; border-radius: 2px; background: var(--buy); transition: width .4s, background .4s; }
+.ov-loss-bar-fill.warn   { background: var(--amber); }
+.ov-loss-bar-fill.danger { background: var(--sell); }
+
+.ov-risk-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border); }
+.ov-risk-cell { background: var(--bg-panel); padding: 9px 12px; }
+.ov-risk-lbl  { font-size: 8px; color: var(--text-dim); letter-spacing: .5px; margin-bottom: 3px; }
+.ov-risk-val  { font-size: 12px; font-weight: 600; color: var(--text-hi); }
+
+.ov-pos-header { display: grid; grid-template-columns: 18px 68px 80px 80px 76px 58px; padding: 5px 12px; font-size: 8px; color: var(--text-dim); letter-spacing: .5px; border-bottom: 1px solid var(--border); }
+.ov-pos-row    { display: grid; grid-template-columns: 18px 68px 80px 80px 76px 58px; padding: 7px 12px; border-bottom: 1px solid var(--border); font-size: 10px; align-items: center; }
+.ov-pos-row:last-child { border-bottom: none; }
+.ov-close-btn  { font-size: 8px; padding: 2px 6px; background: var(--sell-dim); border: 1px solid rgba(255,45,85,.3); color: var(--sell); cursor: pointer; letter-spacing: .5px; transition: background .15s; font-family: var(--mono); }
+.ov-close-btn:hover { background: rgba(255,45,85,.2); }
+
+.ov-sig-card  { padding: 10px 12px; display: flex; align-items: center; gap: 10px; }
+.ov-sig-dir   { font-size: 20px; line-height: 1; }
+.ov-sig-meta  { flex: 1; }
+.ov-sig-sym   { font-weight: 700; color: var(--amber); }
+.ov-sig-sub   { font-size: 9px; color: var(--text-dim); margin-top: 2px; }
+.ov-apply-btn { font-size: 8px; padding: 4px 10px; background: var(--blue-dim); border: 1px solid rgba(77,143,255,.3); color: var(--blue); cursor: pointer; letter-spacing: .5px; white-space: nowrap; transition: background .15s; font-family: var(--mono); }
+.ov-apply-btn:hover { background: rgba(77,143,255,.2); }
+
+.ov-news-row              { padding: 7px 12px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--border); font-size: 10px; }
+.ov-news-row:last-child   { border-bottom: none; }
+.ov-news-badge            { font-size: 8px; padding: 2px 6px; border-radius: 2px; letter-spacing: .3px; flex-shrink: 0; }
+.ov-news-badge.BULLISH    { background: var(--buy-dim);   border: 1px solid rgba(0,232,122,.3);  color: var(--buy);      }
+.ov-news-badge.BEARISH    { background: var(--sell-dim);  border: 1px solid rgba(255,45,85,.3);  color: var(--sell);     }
+.ov-news-badge.NEUTRAL    { background: var(--bg-raised); border: 1px solid var(--border);       color: var(--text-dim); }
+.ov-news-title { flex: 1; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-news-score { font-size: 9px; font-weight: 700; flex-shrink: 0; }
+
+.ov-empty { padding: 16px 12px; color: var(--text-dim); font-size: 9.5px; text-align: center; }
