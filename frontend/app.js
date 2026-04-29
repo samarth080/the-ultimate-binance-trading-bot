@@ -226,6 +226,212 @@ function showResult(cls, txt) {
 }
 function hideResult() { id('oresult').className = 'oresult'; }
 
+// ── Overview ────────────────────────────────────────────────────────────────────────────────
+async function loadOverview() {
+  try {
+    const [stats, risk, kelly, news] = await Promise.all([
+      api.get('/api/stats'),
+      api.get('/api/risk/status'),
+      api.get('/api/kelly'),
+      api.get('/api/news?limit=3'),
+    ]);
+    _renderOvHealth(stats, risk);
+    _renderOvRisk(risk, kelly);
+    _renderOvPositions(stats);
+    _renderOvSignal();
+    _renderOvNews(news);
+  } catch(e) { /* individual helpers show empty state on failure */ }
+}
+
+function _renderOvHealth(stats, risk) {
+  const s        = stats.stats || {};
+  const pnl      = s.total_pnl || 0;
+  const upnl     = stats.total_unrealised || 0;
+  const wr       = s.win_rate || 0;
+  const halted   = risk.halted;
+  const dailyLoss = Math.abs((risk.daily_pnl || 0) < 0 ? (risk.daily_pnl || 0) : 0);
+  const equity    = risk.equity || 10000;
+  const lossUsed  = dailyLoss / (equity * 0.05);
+  const lossPct   = Math.min(100, lossUsed * 100);
+
+  const badge = id('ov-halt-badge');
+  badge.textContent = halted ? 'HALTED' : 'ACTIVE';
+  badge.className   = 'ov-badge ' + (halted ? 'halt' : 'ok');
+
+  id('ov-daily-pnl').textContent = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
+  id('ov-daily-pnl').style.color = pnl >= 0 ? 'var(--buy)' : 'var(--sell)';
+  id('ov-daily-pct').textContent = ((pnl / equity) * 100).toFixed(2) + '% today';
+
+  id('ov-upnl').textContent = (upnl >= 0 ? '+' : '') + '$' + upnl.toFixed(2);
+  id('ov-upnl').style.color = upnl >= 0 ? 'var(--buy)' : 'var(--sell)';
+  id('ov-pos-count').textContent = (stats.open_positions || 0) + ' position' + ((stats.open_positions || 0) !== 1 ? 's' : '');
+
+  id('ov-winrate').textContent   = wr.toFixed(1) + '%';
+  id('ov-winrate').style.color   = wr >= 55 ? 'var(--buy)' : wr >= 45 ? 'var(--amber)' : 'var(--sell)';
+  id('ov-wl').textContent        = (s.wins || 0) + 'W / ' + (s.losses || 0) + 'L';
+
+  const fill = id('ov-loss-fill');
+  fill.style.width  = lossPct + '%';
+  fill.className    = 'ov-loss-bar-fill' + (lossPct >= 80 ? ' danger' : lossPct >= 50 ? ' warn' : '');
+  const remain      = Math.max(0, 100 - lossPct).toFixed(0);
+  id('ov-loss-remain').textContent = remain + '% remaining';
+  id('ov-loss-remain').style.color = lossPct >= 80 ? 'var(--sell)' : lossPct >= 50 ? 'var(--amber)' : 'var(--buy)';
+}
+
+function _renderOvRisk(risk, kelly) {
+  const halted    = risk.halted;
+  const positions = risk.open_positions || 0;
+  const maxPos    = risk.max_positions  || 10;
+  const drawdown  = risk.drawdown_pct   || 0;
+  const dailyPnl  = risk.daily_pnl     || 0;
+  const kellySize = kelly.next_size_usdt;
+
+  const riskBadge = id('ov-risk-badge');
+  riskBadge.textContent = halted ? 'HALTED' : positions >= maxPos - 2 ? 'NEAR LIMIT' : 'OK';
+  riskBadge.className   = 'ov-badge ' + (halted ? 'halt' : positions >= maxPos - 2 ? 'warn' : 'ok');
+
+  id('ov-open-pos').textContent  = positions + ' / ' + maxPos;
+  id('ov-open-pos').style.color  = positions >= maxPos - 2 ? 'var(--amber)' : 'var(--text-hi)';
+
+  id('ov-drawdown').textContent  = drawdown.toFixed(2) + '%';
+  id('ov-drawdown').style.color  = drawdown >= 8 ? 'var(--sell)' : drawdown >= 5 ? 'var(--amber)' : 'var(--buy)';
+
+  id('ov-daily-loss').textContent = (dailyPnl >= 0 ? '+' : '') + dailyPnl.toFixed(2);
+  id('ov-daily-loss').style.color = dailyPnl >= 0 ? 'var(--buy)' : 'var(--sell)';
+
+  id('ov-kelly-size').textContent = kellySize ? '$' + parseFloat(kellySize).toFixed(0) + ' USDT' : '—';
+}
+
+function _renderOvPositions(stats) {
+  const trades = stats.open_trades      || [];
+  const upnl   = stats.total_unrealised || 0;
+
+  const total = id('ov-unreal-total');
+  total.textContent = trades.length > 0
+    ? 'unrealised ' + (upnl >= 0 ? '+' : '') + '$' + upnl.toFixed(2)
+    : '';
+  total.style.color = upnl >= 0 ? 'var(--buy)' : 'var(--sell)';
+
+  const body = id('ov-positions-body');
+  if (!trades.length) {
+    body.innerHTML = '<div class="ov-empty">No open positions</div>';
+    return;
+  }
+
+  body.innerHTML = trades.map(t => {
+    const isLong  = t.direction === 'LONG';
+    const dirClr  = isLong ? 'var(--buy)' : 'var(--sell)';
+    const pnlClr  = (t.unrealised_pnl || 0) >= 0 ? 'var(--buy)' : 'var(--sell)';
+    const pnlTxt  = t.unrealised_pnl != null
+      ? (t.unrealised_pnl >= 0 ? '+' : '') + '$' + t.unrealised_pnl.toFixed(2)
+      : '—';
+    const markTxt  = t.current ? fmt(t.current) : '—';
+    const entryTxt = t.entry   ? fmt(t.entry)   : '—';
+    return '<div class="ov-pos-row">'
+      + '<span style="color:' + dirClr + '">' + (isLong ? '▲' : '▼') + '</span>'
+      + '<span style="color:var(--amber)">' + esc(t.symbol) + '</span>'
+      + '<span>' + entryTxt + '</span>'
+      + '<span style="color:var(--gold)">' + markTxt + '</span>'
+      + '<span style="color:' + pnlClr + '">' + pnlTxt + '</span>'
+      + '<button class="ov-close-btn" data-symbol="' + esc(t.symbol) + '" data-direction="' + esc(t.direction) + '" data-qty="' + esc(String(t.quantity || '')) + '">CLOSE</button>'
+      + '</div>';
+  }).join('');
+
+  body.querySelectorAll('.ov-close-btn').forEach(btn => {
+    btn.addEventListener('click', () => _closePosition(btn));
+  });
+}
+
+function _renderOvSignal() {
+  const d    = S.lastSignal;
+  const body = id('ov-signal-body');
+  const age  = id('ov-signal-age');
+
+  if (!d || !d.has_signal) {
+    body.innerHTML = '<div class="ov-empty">No active signal — run Signal Engine tab to scan</div>';
+    age.textContent = '';
+    return;
+  }
+
+  const isLong = d.direction === 'LONG';
+  const dirClr = isLong ? 'var(--buy)' : 'var(--sell)';
+  const rrRaw  = d.stop_loss && d.take_profit && d.price
+    ? Math.abs(d.take_profit - d.price) / Math.abs(d.price - d.stop_loss) : 0;
+
+  age.textContent = 'from signal engine scan';
+
+  body.innerHTML = '<div class="ov-sig-card">'
+    + '<div class="ov-sig-dir" style="color:' + dirClr + '">' + (isLong ? '▲' : '▼') + '</div>'
+    + '<div class="ov-sig-meta">'
+    +   '<div><span class="ov-sig-sym">' + esc(d.symbol) + '</span>'
+    +   ' <span style="color:' + dirClr + '">' + esc(d.direction) + '</span>'
+    +   ' <span style="color:var(--text-dim)">· ' + esc(d.primary_tf || '') + '/' + esc(d.confirm_tf || '') + '</span></div>'
+    +   '<div class="ov-sig-sub">' + d.confidence + '% confluence · R:R ' + rrRaw.toFixed(2)
+    +   ' · SL ' + (d.stop_loss ? fmt(d.stop_loss) : '—')
+    +   ' · TP ' + (d.take_profit ? fmt(d.take_profit) : '—') + '</div>'
+    + '</div>'
+    + '<button class="ov-apply-btn" id="ov-apply-btn">→ APPLY</button>'
+    + '</div>';
+
+  id('ov-apply-btn').addEventListener('click', applySignalToOrder);
+}
+
+function _renderOvNews(news) {
+  const items = (news && news.items) ? news.items : [];
+  const body  = id('ov-news-body');
+  const badge = id('ov-news-badge');
+
+  const agg = items.reduce((s, n) => s + (n.score || 0), 0);
+  badge.textContent = agg > 10 ? 'BULLISH +' + agg : agg < -10 ? 'BEARISH ' + agg : 'NEUTRAL ' + (agg >= 0 ? '+' : '') + agg;
+  badge.className   = 'ov-badge ' + (agg > 10 ? 'ok' : agg < -10 ? 'halt' : 'warn');
+
+  if (!items.length) {
+    body.innerHTML = '<div class="ov-empty">News engine disabled or no articles yet</div>';
+    return;
+  }
+
+  body.innerHTML = items.slice(0, 3).map(n => {
+    const scoreVal   = n.score || 0;
+    const scoreStr   = (scoreVal >= 0 ? '+' : '') + scoreVal;
+    const scoreColor = scoreVal >= 30 ? 'var(--buy)' : scoreVal <= -30 ? 'var(--sell)' : 'var(--amber)';
+    return '<div class="ov-news-row">'
+      + '<span class="ov-news-badge ' + esc(n.sentiment) + '">' + esc(n.sentiment) + '</span>'
+      + '<span class="ov-news-title">' + esc(n.title) + '</span>'
+      + '<span class="ov-news-score" style="color:' + scoreColor + '">' + scoreStr + '</span>'
+      + '</div>';
+  }).join('');
+}
+
+async function _closePosition(btn) {
+  const symbol    = btn.dataset.symbol;
+  const direction = btn.dataset.direction;
+  const qty       = parseFloat(btn.dataset.qty);
+  const closeSide = direction === 'LONG' ? 'SELL' : 'BUY';
+
+  if (!symbol || !qty || isNaN(qty)) {
+    btn.textContent = 'ERR';
+    setTimeout(() => { btn.textContent = 'CLOSE'; }, 2000);
+    return;
+  }
+  if (!window.confirm('Close ' + direction + ' ' + symbol + '? Places a live ' + closeSide + ' order.')) return;
+
+  btn.textContent = '…';
+  btn.disabled    = true;
+
+  try {
+    await api.post('/api/order/market', { symbol, side: closeSide, quantity: qty, dry_run: false });
+    btn.textContent   = 'CLOSED';
+    btn.style.color   = 'var(--buy)';
+    setTimeout(() => loadOverview(), 2000);
+  } catch(e) {
+    btn.textContent = 'FAIL';
+    btn.disabled    = false;
+    btn.style.color = 'var(--sell)';
+    setTimeout(() => { btn.textContent = 'CLOSE'; btn.style.color = ''; }, 3000);
+    setAction('Close failed: ' + e.message);
+  }
+}
+
 // ── Analytics ─────────────────────────────────────────────────────────────────
 async function loadAnalytics() {
   const sym  = id('a-sym').value;
