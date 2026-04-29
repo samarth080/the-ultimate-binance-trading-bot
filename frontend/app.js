@@ -1488,3 +1488,7 @@ function setAction(msg) { id('sb-action').textContent = msg; }
     });
   };
 })();
+
+// ── Overview polling ────────────────────────────────────────────────────────────────────────────────
+loadOverview();
+setInterval(() => { if (S.currentView === 'overview') loadOverview(); }, 30000);
