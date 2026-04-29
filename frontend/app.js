@@ -13,7 +13,7 @@ const S = {
   sides: { m:'BUY', l:'BUY', o:'BUY', s:'BUY', t:'BUY' },
   logFilter: 'ALL',
   logs: [],
-  currentView: 'analytics',
+  currentView: 'overview',
   lastSignal: null,
 };
 
@@ -125,10 +125,12 @@ document.querySelectorAll('.lfbtn').forEach(b => b.addEventListener('click', () 
 // ── Centre panel tabs ─────────────────────────────────────────────────────────
 document.querySelectorAll('.ctab').forEach(t => t.addEventListener('click', () => {
   document.querySelectorAll('.ctab').forEach(x => x.classList.remove('active'));
-  document.querySelectorAll('.cview').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('.cview').forEach(x => { x.classList.remove('active'); x.style.display = ''; });
   t.classList.add('active');
   S.currentView = t.dataset.view;
-  id('view-' + S.currentView).classList.add('active');
+  const _activeView = id('view-' + S.currentView);
+  _activeView.classList.add('active');
+  if (S.currentView === 'overview') _activeView.style.display = 'grid';
   // Toggle controls
   ['analytics','signal','stats','scanner'].forEach(v => {
     const ctrl = id('ctrl-' + v);
@@ -138,9 +140,10 @@ document.querySelectorAll('.ctab').forEach(t => t.addEventListener('click', () =
   const newsView = id('view-news');
   if (newsView) newsView.style.display = (S.currentView === 'news') ? 'flex' : 'none';
   // Auto-load data when switching tabs
-  if (S.currentView === 'stats')   loadStats();
-  if (S.currentView === 'news')    loadNews();
-  if (S.currentView === 'scanner') loadScanner();
+  if (S.currentView === 'overview') loadOverview();
+  if (S.currentView === 'stats')    loadStats();
+  if (S.currentView === 'news')     loadNews();
+  if (S.currentView === 'scanner')  loadScanner();
 }));
 
 // ── Order tabs ────────────────────────────────────────────────────────────────
