@@ -148,7 +148,8 @@
     <!-- Tab bar + controls row -->
     <div style="display:flex;align-items:center;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--bg-panel);">
       <div class="centre-tabs" style="border-bottom:none;flex:1;">
-        <div class="ctab active" data-view="analytics">ML ANALYTICS</div>
+        <div class="ctab active" data-view="overview">OVERVIEW</div>
+        <div class="ctab"        data-view="analytics">ML ANALYTICS</div>
         <div class="ctab"        data-view="signal">SIGNAL ENGINE</div>
         <div class="ctab"        data-view="scanner">SCANNER</div>
         <div class="ctab"        data-view="stats">TRADE STATS</div>
@@ -213,8 +214,118 @@
       </div>
     </div>
 
+    <!-- OVERVIEW VIEW -->
+    <div class="cview active" id="view-overview" style="display:grid">
+      <!-- Left column: Account Health + Risk -->
+      <div class="ov-col">
+
+        <!-- Account Health -->
+        <div class="ov-panel">
+          <div class="ph">
+            <span class="ph-title">ACCOUNT HEALTH</span>
+            <span class="ov-badge" id="ov-halt-badge">ACTIVE</span>
+          </div>
+          <div class="ov-kpi-row">
+            <div class="ov-kpi">
+              <div class="ov-kpi-lbl">DAILY PnL</div>
+              <div class="ov-kpi-val" id="ov-daily-pnl">—</div>
+              <div class="ov-kpi-sub" id="ov-daily-pct">—</div>
+            </div>
+            <div class="ov-kpi">
+              <div class="ov-kpi-lbl">UNREALISED</div>
+              <div class="ov-kpi-val" id="ov-upnl">—</div>
+              <div class="ov-kpi-sub" id="ov-pos-count">—</div>
+            </div>
+            <div class="ov-kpi">
+              <div class="ov-kpi-lbl">WIN RATE</div>
+              <div class="ov-kpi-val" id="ov-winrate">—</div>
+              <div class="ov-kpi-sub" id="ov-wl">—</div>
+            </div>
+          </div>
+          <div class="ov-loss-bar-wrap">
+            <div class="ov-loss-bar-lbl">
+              <span>DAILY LOSS LIMIT</span>
+              <span id="ov-loss-remain">—</span>
+            </div>
+            <div class="ov-loss-bar-track">
+              <div class="ov-loss-bar-fill" id="ov-loss-fill" style="width:0%"></div>
+            </div>
+            <div class="ov-loss-bar-lbl"><span>0%</span><span>halt at 5%</span></div>
+          </div>
+        </div>
+
+        <!-- Risk Status -->
+        <div class="ov-panel">
+          <div class="ph">
+            <span class="ph-title">RISK STATUS</span>
+            <span class="ov-badge" id="ov-risk-badge">—</span>
+          </div>
+          <div class="ov-risk-grid">
+            <div class="ov-risk-cell">
+              <div class="ov-risk-lbl">OPEN POSITIONS</div>
+              <div class="ov-risk-val" id="ov-open-pos">—</div>
+            </div>
+            <div class="ov-risk-cell">
+              <div class="ov-risk-lbl">DRAWDOWN</div>
+              <div class="ov-risk-val" id="ov-drawdown">—</div>
+            </div>
+            <div class="ov-risk-cell">
+              <div class="ov-risk-lbl">DAILY LOSS</div>
+              <div class="ov-risk-val" id="ov-daily-loss">—</div>
+            </div>
+            <div class="ov-risk-cell">
+              <div class="ov-risk-lbl">KELLY SIZE</div>
+              <div class="ov-risk-val" id="ov-kelly-size">—</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Right column: Positions + Signal + News -->
+      <div class="ov-col">
+
+        <!-- Open Positions -->
+        <div class="ov-panel">
+          <div class="ph">
+            <span class="ph-title">OPEN POSITIONS</span>
+            <span id="ov-unreal-total" style="font-size:9px;color:var(--text-dim)">—</span>
+          </div>
+          <div class="ov-pos-header">
+            <span></span><span>SYMBOL</span><span>ENTRY</span><span>MARK</span><span>UNREAL</span><span></span>
+          </div>
+          <div id="ov-positions-body">
+            <div class="ov-empty">No open positions</div>
+          </div>
+        </div>
+
+        <!-- Latest Signal -->
+        <div class="ov-panel">
+          <div class="ph">
+            <span class="ph-title">LATEST SIGNAL</span>
+            <span id="ov-signal-age" style="font-size:9px;color:var(--text-dim)">—</span>
+          </div>
+          <div id="ov-signal-body">
+            <div class="ov-empty">No active signal — run Signal Engine tab to scan</div>
+          </div>
+        </div>
+
+        <!-- News Sentiment -->
+        <div class="ov-panel">
+          <div class="ph">
+            <span class="ph-title">NEWS SENTIMENT</span>
+            <span class="ov-badge" id="ov-news-badge">—</span>
+          </div>
+          <div id="ov-news-body">
+            <div class="ov-empty">News engine disabled or loading…</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
     <!-- ANALYTICS VIEW -->
-    <div class="cview active" id="view-analytics">
+    <div class="cview" id="view-analytics">
       <div class="analytics-body" id="abody">
         <div class="loading-msg">LOADING MARKET DATA<span class="cursor"></span></div>
       </div>
