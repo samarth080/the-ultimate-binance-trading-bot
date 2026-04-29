@@ -24,3 +24,10 @@ data/cache/*
 !data/cache/.gitkeep
 data/db/*
 !data/db/.gitkeep
+
+# Runtime data files
+data/*.db
+data/SOUL.md
+
+# Superpowers plugin session files
+.superpowers/
