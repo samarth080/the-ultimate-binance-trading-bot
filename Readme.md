@@ -458,7 +458,7 @@ All Telegram calls are fire-and-forget (daemon threads) — a Telegram outage ne
 
 **This software is for educational and research purposes only. Cryptocurrency trading carries a high level of risk and may not be suitable for all investors. Past performance is not indicative of future results. Never trade with funds you cannot afford to lose. The authors are not responsible for any financial losses incurred through the use of this software.**
 
-Always test thoroughly on Binance Testnet (`USE_TESTNET=true`) before enabling live trading.
+Always test thoroughly on Binance Testnet (`USE_TESTNET=true`) before enabling live trading
 
 ---
 
